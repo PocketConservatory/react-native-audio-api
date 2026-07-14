@@ -41,6 +41,7 @@ AVCodecID getCodecID(const std::shared_ptr<AudioFileProperties> &properties) {
     case AudioFileProperties::Format::CAF:
       return getPCMCodecID(properties);
     case AudioFileProperties::Format::M4A:
+    case AudioFileProperties::Format::ADTS:
       return AV_CODEC_ID_AAC;
     case AudioFileProperties::Format::FLAC:
       return AV_CODEC_ID_FLAC;
@@ -53,7 +54,8 @@ AVCodecID getCodecID(const std::shared_ptr<AudioFileProperties> &properties) {
 /// @param properties The audio file properties.
 /// @return The corresponding AVSampleFormat.
 AVSampleFormat getSampleFormat(const std::shared_ptr<AudioFileProperties> &properties) {
-  if (properties->format == AudioFileProperties::Format::M4A) {
+  if (properties->format == AudioFileProperties::Format::M4A ||
+      properties->format == AudioFileProperties::Format::ADTS) {
     return AV_SAMPLE_FMT_FLTP;
   }
 
@@ -91,6 +93,8 @@ std::string getMuxerName(const std::shared_ptr<AudioFileProperties> &properties)
       return "mp4";
     case AudioFileProperties::Format::FLAC:
       return "flac";
+    case AudioFileProperties::Format::ADTS:
+      return "adts";
     default:
       return "mp4";
   }
