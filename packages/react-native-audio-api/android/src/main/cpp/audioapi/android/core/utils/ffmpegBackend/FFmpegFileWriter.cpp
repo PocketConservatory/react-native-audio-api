@@ -121,7 +121,9 @@ OpenFileResult FFmpegAudioFileWriter::openFile(
             .and_then([this](auto) { return initializeStream(); })
             .and_then([this](auto) { return openIOAndWriteHeader(); });
 
-  return containerInit
+  // `and_then` is rvalue-ref-qualified (Result.hpp), so the accumulated chain
+  // must be consumed as an rvalue — `containerInit` is a named lvalue here.
+  return std::move(containerInit)
       .and_then(
           [this](auto) { return initializeResampler(streamSampleRate_, streamChannelCount_); })
       .and_then([this](auto) {
