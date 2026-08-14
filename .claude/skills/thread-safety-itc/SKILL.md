@@ -147,6 +147,8 @@ when the service dies for a system-initiated reason. Two invariants:
 - Never hold the registry mutex across `AudioRecorder::stop()`: promote the `weak_ptr`s to
   `shared_ptr`s under the lock, release it, then stop. `stop()` takes the recorder's own locks and
   joins the file-writer thread; a concurrent JS-thread `stop()` is safe (one winner, one inert `Err`).
+  That guarantee is stop-vs-stop only: any field `start()` mutates (e.g. the output paths) must be
+  snapshotted/cleared inside `stop()`'s locked block, because the registry made `stop()` cross-thread.
 
 Kotlin `object` + `@JvmStatic external fun` ↔ fbjni `JavaClass` static natives registered in
 `JNI_OnLoad` (see `RecorderEmergencyStop`) is the pattern for natives that must survive React module

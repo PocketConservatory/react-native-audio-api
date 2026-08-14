@@ -231,19 +231,21 @@ AndroidAudioRecorder::stop() {
       connectedConfigured_.store(false, std::memory_order_release);
       adapterNode = std::move(adapterNode_);
     }
-  }
 
-  for (const auto &raw : recordingSegmentPaths_) {
-    if (!raw.empty()) {
-      outputPaths.push_back(std::format("file://{}", raw));
+    // Path fields are mutated by start(); stop() can now run off the JS thread
+    // (AudioRecorderRegistry), so snapshot and clear them under the lock.
+    for (const auto &raw : recordingSegmentPaths_) {
+      if (!raw.empty()) {
+        outputPaths.push_back(std::format("file://{}", raw));
+      }
     }
-  }
-  if (hadFileOutput && outputPaths.empty() && !filePath_.empty()) {
-    outputPaths.push_back(std::format("file://{}", filePath_));
-  }
+    if (hadFileOutput && outputPaths.empty() && !filePath_.empty()) {
+      outputPaths.push_back(std::format("file://{}", filePath_));
+    }
 
-  recordingSegmentPaths_.clear();
-  filePath_ = "";
+    recordingSegmentPaths_.clear();
+    filePath_ = "";
+  }
 
   if (fileWriter != nullptr) {
     auto fileResult = fileWriter->closeFile();
