@@ -185,7 +185,8 @@ Result<NoneType, std::string> AndroidAudioRecorder::start(const std::string &fil
 }
 
 /// @brief Stops the audio stream and finalizes any output (file writing, callback, adapter node).
-/// This method should be called from the JS thread only.
+/// Callable from any thread: state and output fields are handled under the internal locks, and a
+/// concurrent stop() resolves to one winner (the loser gets an inert Err). See AudioRecorderRegistry.
 /// @returns On success, returns the file URI, size in MB and duration in seconds of the recorded file (if file output is enabled).
 /// NOTE: due to the file access nature on Android, the size might sometimes be zeroed (really long files).
 Result<std::tuple<std::vector<std::string>, double, double>, std::string>
@@ -231,19 +232,21 @@ AndroidAudioRecorder::stop() {
       connectedConfigured_.store(false, std::memory_order_release);
       adapterNode = std::move(adapterNode_);
     }
-  }
 
-  for (const auto &raw : recordingSegmentPaths_) {
-    if (!raw.empty()) {
-      outputPaths.push_back(std::format("file://{}", raw));
+    // Path fields are mutated by start(); stop() can now run off the JS thread
+    // (AudioRecorderRegistry), so snapshot and clear them under the lock.
+    for (const auto &raw : recordingSegmentPaths_) {
+      if (!raw.empty()) {
+        outputPaths.push_back(std::format("file://{}", raw));
+      }
     }
-  }
-  if (hadFileOutput && outputPaths.empty() && !filePath_.empty()) {
-    outputPaths.push_back(std::format("file://{}", filePath_));
-  }
+    if (hadFileOutput && outputPaths.empty() && !filePath_.empty()) {
+      outputPaths.push_back(std::format("file://{}", filePath_));
+    }
 
-  recordingSegmentPaths_.clear();
-  filePath_ = "";
+    recordingSegmentPaths_.clear();
+    filePath_ = "";
+  }
 
   if (fileWriter != nullptr) {
     auto fileResult = fileWriter->closeFile();

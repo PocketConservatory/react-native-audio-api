@@ -39,6 +39,8 @@ list(REMOVE_ITEM RNAUDIOAPI_SRC
   "${REACT_NATIVE_AUDIO_API_DIR}/common/cpp/audioapi/core/AudioContext.cpp"
   "${REACT_NATIVE_AUDIO_API_DIR}/common/cpp/audioapi/libs/ffmpeg/FFmpegDecoding.cpp"
   "${REACT_NATIVE_AUDIO_API_DIR}/common/cpp/audioapi/core/sources/AudioFileSourceNode.cpp"
+  # References AudioBufferHostObject, which the HostObjects exclusion above removes.
+  "${REACT_NATIVE_AUDIO_API_DIR}/common/cpp/audioapi/core/utils/AudioRecorderCallback.cpp"
 )
 
 file(GLOB_RECURSE RNAUDIOAPI_LIBS
