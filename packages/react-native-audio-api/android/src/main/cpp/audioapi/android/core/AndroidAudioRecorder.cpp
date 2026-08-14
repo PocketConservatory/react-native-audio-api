@@ -185,7 +185,8 @@ Result<NoneType, std::string> AndroidAudioRecorder::start(const std::string &fil
 }
 
 /// @brief Stops the audio stream and finalizes any output (file writing, callback, adapter node).
-/// This method should be called from the JS thread only.
+/// Callable from any thread: state and output fields are handled under the internal locks, and a
+/// concurrent stop() resolves to one winner (the loser gets an inert Err). See AudioRecorderRegistry.
 /// @returns On success, returns the file URI, size in MB and duration in seconds of the recorded file (if file output is enabled).
 /// NOTE: due to the file access nature on Android, the size might sometimes be zeroed (really long files).
 Result<std::tuple<std::vector<std::string>, double, double>, std::string>
