@@ -136,6 +136,24 @@ See the `utilities` skill for full API.
 
 ---
 
+## Emergency Stop From Service Death (`AudioRecorderRegistry`)
+
+Recorders can be stopped from OUTSIDE the JS thread: `CentralizedForegroundService.onDestroy` calls
+`AudioRecorderRegistry::stopAllActiveRecordings()` (via the `RecorderEmergencyStop` static JNI object)
+when the service dies for a system-initiated reason. Two invariants:
+
+- With `android:stopWithTask="true"`, `onTaskRemoved` is NEVER delivered — `onDestroy` is the only
+  swipe-kill signal, and the work must run synchronously there (the process may be frozen afterward).
+- Never hold the registry mutex across `AudioRecorder::stop()`: promote the `weak_ptr`s to
+  `shared_ptr`s under the lock, release it, then stop. `stop()` takes the recorder's own locks and
+  joins the file-writer thread; a concurrent JS-thread `stop()` is safe (one winner, one inert `Err`).
+
+Kotlin `object` + `@JvmStatic external fun` ↔ fbjni `JavaClass` static natives registered in
+`JNI_OnLoad` (see `RecorderEmergencyStop`) is the pattern for natives that must survive React module
+invalidation.
+
+---
+
 ## Common Mistakes
 
 - **Reading `node_->field_` in a getter** when that field is written by the audio thread → use shadow state or atomics.

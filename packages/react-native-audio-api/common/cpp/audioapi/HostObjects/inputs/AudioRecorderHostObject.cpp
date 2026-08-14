@@ -3,6 +3,7 @@
 #include <audioapi/HostObjects/sources/AudioBufferHostObject.h>
 #include <audioapi/HostObjects/sources/RecorderAdapterNodeHostObject.h>
 #include <audioapi/core/inputs/AudioRecorder.h>
+#include <audioapi/core/inputs/AudioRecorderRegistry.h>
 #include <audioapi/events/AudioEventHandlerRegistry.h>
 #include <audioapi/jsi/JsiUtils.h>
 #include <audioapi/utils/AudioBuffer.hpp>
@@ -23,6 +24,8 @@ AudioRecorderHostObject::AudioRecorderHostObject(
 #else
   audioRecorder_ = std::make_shared<IOSAudioRecorder>(audioEventHandlerRegistry);
 #endif
+
+  AudioRecorderRegistry::registerRecorder(audioRecorder_);
 
   addFunctions(
       JSI_EXPORT_FUNCTION(AudioRecorderHostObject, start),

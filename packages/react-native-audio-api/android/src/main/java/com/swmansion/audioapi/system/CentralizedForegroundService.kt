@@ -25,6 +25,8 @@ class CentralizedForegroundService : Service() {
     const val ACTION_STOP = "STOP_FOREGROUND"
   }
 
+  private var explicitStop = false
+
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(
@@ -38,6 +40,7 @@ class CentralizedForegroundService : Service() {
       }
 
       ACTION_STOP -> {
+        explicitStop = true
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
       }
@@ -108,6 +111,18 @@ class CentralizedForegroundService : Service() {
 
   override fun onDestroy() {
     Log.d(TAG, "Centralized foreground service destroyed")
+    if (!explicitStop) {
+      // With android:stopWithTask="true" onTaskRemoved is never delivered, so a system-initiated
+      // teardown (e.g. swipe-kill) only surfaces here. Finalize recordings synchronously — after
+      // onDestroy returns the process may be frozen. No-op when all recorders are idle.
+      try {
+        RecorderEmergencyStop.stopActiveRecordings()
+      } catch (e: UnsatisfiedLinkError) {
+        Log.w(TAG, "Native library not loaded, cannot stop active recordings: ${e.message}")
+      } catch (e: Exception) {
+        Log.e(TAG, "Error stopping active recordings: ${e.message}", e)
+      }
+    }
     super.onDestroy()
   }
 }
