@@ -111,14 +111,17 @@ TEST(AudioRecorderRegistryTest, StopAllIsIdempotent) {
 }
 
 TEST(AudioRecorderRegistryTest, SurvivesDestroyedRecorders) {
-  {
-    auto shortLived = std::make_shared<FakeRecorder>();
-    (void)shortLived->start("");
-    AudioRecorderRegistry::registerRecorder(shortLived);
-  }
+  auto shortLived = std::make_shared<FakeRecorder>();
+  (void)shortLived->start("");
+  AudioRecorderRegistry::registerRecorder(shortLived);
   auto alive = std::make_shared<FakeRecorder>();
   (void)alive->start("");
   AudioRecorderRegistry::registerRecorder(alive);
+
+  // Destroy after both registrations so the expired entry is still present at
+  // stop-all time, exercising its lock()-failure erase branch (registration
+  // would otherwise prune it first).
+  shortLived.reset();
 
   AudioRecorderRegistry::stopAllActiveRecordings();
 
