@@ -71,8 +71,9 @@
     "format:common": "find common/cpp/ \\( -path 'common/cpp/audioapi/libs' -prune -o -path 'common/cpp/audioapi/external' -prune -o -type f \\( -iname \"*.h\" -o -iname \"*.cpp\" -o -iname \"*.hpp\" \\) -print \\) | xargs clang-format -i",
     "build": "bob build",
     "create:package": "./scripts/create-package.sh",
-    "prepack": "cp ../../README.md ./README.md",
-    "postpack": "rm ./README.md"
+    "prepack": "bob build && cp ../../README.md ./README.md",
+    "postpack": "rm ./README.md",
+    "prepare": "bob build"
   },
   "keywords": [
     "react-native",
