@@ -1,63 +1,50 @@
 #include <audioapi/jsi/RuntimeObserver.h>
+#include <audioapi/jsi/RuntimeObserverRegistry.h>
 #include <memory>
-#include <mutex>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
 
 namespace audioapi {
 
-static std::unordered_map<jsi::Runtime *, std::unordered_set<RuntimeObserverListener *>> listeners;
-static std::mutex listenersMutex;
+namespace {
+
+// Leaked so that runtimes torn down during static destruction still find it.
+RuntimeObserverRegistry &registry() {
+  static auto *instance = new RuntimeObserverRegistry();
+  return *instance;
+}
 
 struct RuntimeObserverObject : public jsi::HostObject {
   jsi::Runtime *rt_;
   explicit RuntimeObserverObject(jsi::Runtime *rt) : rt_(rt) {}
   ~RuntimeObserverObject() override {
-    std::unordered_set<RuntimeObserverListener *> toNotify;
-    {
-      std::scoped_lock lock(listenersMutex);
-      auto listenersSet = listeners.find(rt_);
-      if (listenersSet != listeners.end()) {
-        toNotify = std::move(listenersSet->second);
-        listeners.erase(listenersSet);
-      }
-    }
-    // Notify outside the lock — listener callbacks may re-enter add/remove.
-    for (auto *listener : toNotify) {
-      listener->onRuntimeDestroyed(rt_);
-    }
+    registry().notifyAndErase(rt_);
   }
 };
 
+} // namespace
+
 void RuntimeObserver::addListener(jsi::Runtime &rt, RuntimeObserverListener *listener) {
-  std::scoped_lock lock(listenersMutex);
-  auto listenersSet = listeners.find(&rt);
-  if (listenersSet == listeners.end()) {
+  if (!registry().contains(&rt)) {
     // We install a global host object in the provided runtime, this way we can
     // use that host object destructor to get notified when the runtime is being
     // terminated. We use a unique name for the object as it gets saved with the
     // runtime's global object.
+    // No registry lock is held here: setProperty allocates on the JS heap, and
+    // a GC it triggers can finalize host objects whose destructors call
+    // removeListener.
     rt.global().setProperty(
         rt,
         "__rnaudioapi_runtime_observer",
         jsi::Object::createFromHostObject(rt, std::make_shared<RuntimeObserverObject>(&rt)));
-    std::unordered_set<RuntimeObserverListener *> newSet;
-    newSet.insert(listener);
-    listeners.emplace(&rt, std::move(newSet));
-  } else {
-    listenersSet->second.insert(listener);
   }
+  registry().add(&rt, listener);
 }
 
 void RuntimeObserver::removeListener(jsi::Runtime &rt, RuntimeObserverListener *listener) {
-  std::scoped_lock lock(listenersMutex);
-  auto listenersSet = listeners.find(&rt);
-  if (listenersSet == listeners.end()) {
-    // nothing to do here
-  } else {
-    listenersSet->second.erase(listener);
-  }
+  registry().remove(&rt, listener);
+}
+
+void RuntimeObserver::removeListenerFromAll(RuntimeObserverListener *listener) {
+  registry().removeFromAll(listener);
 }
 
 } // namespace audioapi
