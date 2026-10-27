@@ -29,10 +29,9 @@ class RuntimeAwareCache : public RuntimeLifecycleListener {
   }
 
   ~RuntimeAwareCache() override {
-    for (auto &cache : runtimeCaches_) {
-      // remove all `onRuntimeDestroyed` listeners.
-      RuntimeLifecycleMonitor::removeListener(*cache.first, this);
-    }
+    // runtimeCaches_ is not iterated here: a runtime teardown on another thread
+    // may be erasing from it through onRuntimeDestroyed.
+    RuntimeLifecycleMonitor::removeListenerFromAll(this);
   }
 
   T &get(jsi::Runtime &rt) {
