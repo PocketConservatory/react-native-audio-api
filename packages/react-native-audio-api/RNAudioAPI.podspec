@@ -150,6 +150,12 @@ Pod::Spec.new do |s|
     "CLANG_CXX_LANGUAGE_STANDARD" => "c++20",
     "GCC_PREPROCESSOR_DEFINITIONS" => '$(inherited) HAVE_ACCELERATE=1',
     'OTHER_CFLAGS' => "$(inherited) #{fabric_flags} #{version_flag} #{worklets_preprocessor_flag} #{ffmpeg_flag} #{static_external_libs_flag}",
+    # CocoaPods links vendored frameworks only into the app target. Under
+    # `use_frameworks! :linkage => :dynamic` this pod is its own dylib and must
+    # link FFmpeg itself; static linkage ignores these flags.
+    'OTHER_LDFLAGS' => ['$(inherited)']
+      .concat($RN_AUDIO_API_FFMPEG_DISABLED ? [] : ffmpeg_framework_names.flat_map { |framework| ['-framework', "\"#{framework}\""] })
+      .join(' '),
   }
 
   s.xcconfig = {
