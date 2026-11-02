@@ -77,11 +77,17 @@ class FakeAudioRecorder : public AudioRecorder {
     return Ok(None);
   }
 
+  // Mirrors the platform recorders: pause() goes through the shared markPaused(), and
+  // isRecording() also requires a live stream, which a reconnect takes away.
+  bool streamReconnecting = false;
+
   void pause() override {
-    state_ = RecorderState::Paused;
+    markPaused();
   }
   void resume() override {
-    state_ = RecorderState::Recording;
+    if (state_ == RecorderState::Paused) {
+      state_ = RecorderState::Recording;
+    }
   }
 
   void connect(const std::shared_ptr<RecorderAdapterNode> &) override {}
@@ -91,7 +97,7 @@ class FakeAudioRecorder : public AudioRecorder {
   }
 
   bool isRecording() const override {
-    return state_ == RecorderState::Recording;
+    return state_ == RecorderState::Recording && !streamReconnecting;
   }
   bool isPaused() const override {
     return state_ == RecorderState::Paused;
@@ -153,6 +159,39 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeActOnlyInMatchingStates) {
   EXPECT_EQ(handle.pause(), RecorderState::Paused);
   EXPECT_EQ(handle.resume(), RecorderState::Recording);
   EXPECT_TRUE(recorder->isRecording());
+}
+
+TEST(ActiveRecorderHandleTest, PauseAndResumeReachARecorderWhoseStreamIsReconnecting) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  ASSERT_TRUE(handle.tryStart(recorder, "").is_ok());
+  recorder->streamReconnecting = true;
+
+  EXPECT_EQ(handle.pause(), RecorderState::Paused);
+  EXPECT_EQ(handle.resume(), RecorderState::Recording);
+}
+
+TEST(AudioRecorderPauseTest, PauseWhileTheStreamIsReconnectingPausesTheSession) {
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  ASSERT_TRUE(recorder->start("").is_ok());
+  recorder->streamReconnecting = true;
+
+  recorder->pause();
+
+  EXPECT_EQ(recorder->getState(), RecorderState::Paused);
+}
+
+TEST(AudioRecorderPauseTest, PauseLeavesAnIdleOrPausedRecorderUnchanged) {
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+
+  recorder->pause();
+  EXPECT_EQ(recorder->getState(), RecorderState::Idle);
+
+  ASSERT_TRUE(recorder->start("").is_ok());
+  recorder->pause();
+  recorder->pause();
+  EXPECT_EQ(recorder->getState(), RecorderState::Paused);
 }
 
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {

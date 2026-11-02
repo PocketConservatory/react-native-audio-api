@@ -536,7 +536,9 @@ static AudioEngine *_sharedInstance = nil;
 - (void)pauseIfNecessary
 {
   std::scoped_lock lock(_engineLock);
-  if (self.state == AudioEngineState::AudioEngineStatePaused) {
+  // Only a running engine is paused: an interrupted one must stay Interrupted so
+  // onInterruptionEnd still rebuilds and restarts it.
+  if (self.state != AudioEngineState::AudioEngineStateRunning) {
     return;
   }
 

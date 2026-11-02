@@ -327,18 +327,21 @@ Result<NoneType, std::string> AndroidAudioRecorder::setupFileWriter(
   return Result<NoneType, std::string>::Ok(None);
 }
 
-/// @brief Pauses the audio recording stream.
-/// For session without active file output, this method acts same as stop().
+/// @brief Pauses the recording session (see AudioRecorder::markPaused()). A session whose stream
+/// is reconnecting or still starting is paused too; a stream reclaimed later keeps it paused.
+/// Pausing the stream itself is best-effort: AAudio can't pause an input stream, and the data
+/// callback drops buffers while paused either way.
 /// This method should be called from the JS thread only.
 void AndroidAudioRecorder::pause() {
   std::scoped_lock pauseLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
 
-  if (!isRecording()) {
+  if (!markPaused()) {
     return;
   }
 
-  mStream_->pause(0);
-  state_.store(RecorderState::Paused, std::memory_order_release);
+  if (mStream_ != nullptr) {
+    mStream_->pause(0);
+  }
 }
 
 /// @brief Resumes the audio recording stream if it was previously paused.
@@ -428,7 +431,7 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
     oboe::AudioStream *oboeStream,
     void *audioData,
     int32_t numFrames) {
-  if (isPaused()) {
+  if (!acceptsInput()) {
     return oboe::DataCallbackResult::Continue;
   }
 
@@ -554,10 +557,11 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
   // Start the fresh stream even when paused: AAudio can't pause an input
   // stream anyway, and the data callback drops buffers while paused. A stopped
   // stream drops out of the active recording configurations, so the end of
-  // whatever silenced it (a call) would never be reported.
+  // whatever silenced it (a call) would never be reported. The state is
+  // restored first, so the new stream's callback never sees the teardown's Idle.
+  state_.store(stateBeforeTeardown, std::memory_order_release);
   publishSessionId();
   mStream_->requestStart();
-  state_.store(stateBeforeTeardown, std::memory_order_release);
 }
 
 } // namespace audioapi
