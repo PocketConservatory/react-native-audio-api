@@ -974,3 +974,9 @@ export interface FilePresetType {
 </table>
 
 ## Remarks & known issues
+
+:::note Android input latency
+On Android the recorder opens its input stream in shared mode without the low-latency performance mode, so expect higher input latency than a low-latency stream.
+A low-latency input can be served by an MMAP stream, even in shared mode, and the system disconnects an MMAP stream instead of silencing it when a call or another app takes the microphone.
+A silenced stream is what lets [`observeRecordingInterruptions`](/docs/system/audio-manager#observerecordinginterruptions) report the interruption and its end.
+:::

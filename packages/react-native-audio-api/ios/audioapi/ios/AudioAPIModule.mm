@@ -341,6 +341,13 @@ RCT_EXPORT_METHOD(
   });
 }
 
+RCT_EXPORT_METHOD(
+    isNotificationServiceRunning : (NSString *)key resolve : (RCTPromiseResolveBlock)
+        resolve reject : (RCTPromiseRejectBlock)reject)
+{
+  resolve(@NO);
+}
+
 #ifdef RCT_NEW_ARCH_ENABLED
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params

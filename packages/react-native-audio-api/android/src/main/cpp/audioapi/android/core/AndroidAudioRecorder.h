@@ -51,10 +51,10 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
   void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
 
-  /// @brief Audio session id of the active recorder's input stream, or 0 when no recorder
-  /// session holds a stream. Matches `AudioRecordingConfiguration.getClientAudioSessionId()`.
-  /// Callable from any thread.
-  static int32_t activeSessionId();
+  /// @brief Matches `AudioRecordingConfiguration.getClientAudioSessionId()` of this recorder's
+  /// input stream. Non-zero from just before the stream is started until the session stops; a
+  /// disconnect reclaim keeps the old id until the reopened stream's id replaces it.
+  [[nodiscard]] int32_t audioSessionId() const override;
 
  protected:
   void clearAdapterScratchState() override;
@@ -69,10 +69,9 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   facebook::jni::global_ref<NativeAudioRecorder> nativeAudioRecorder_;
 
   std::shared_ptr<oboe::AudioStream> mStream_;
-  static std::atomic<int32_t> activeSessionId_;
-  /// Session id this recorder published to activeSessionId_; mutated under the recorder locks.
-  int32_t sessionId_ = 0;
-  void releaseActiveSessionId();
+  /// Written under the recorder locks, read lock-free through audioSessionId().
+  std::atomic<int32_t> sessionId_{0};
+  void publishSessionId();
 
   std::vector<std::string> recordingSegmentPaths_;
   Result<NoneType, std::string> openAudioStream();

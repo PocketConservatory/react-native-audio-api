@@ -6,6 +6,7 @@
 #include <audioapi/utils/AudioBuffer.hpp>
 #include <audioapi/utils/Result.hpp>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -81,6 +82,13 @@ class AudioRecorder {
 
   virtual bool isRecording() const = 0;
   virtual bool isPaused() const = 0;
+
+  /// @brief Platform audio session id of the input stream this recorder is starting or holds
+  /// for an active session, or 0 when there is none (or the platform has no such id).
+  /// Lock-free; callable from any thread.
+  [[nodiscard]] virtual int32_t audioSessionId() const {
+    return 0;
+  }
 
   /// @brief Whether the recorder is idle (not recording or paused). Shared by
   /// both platforms.

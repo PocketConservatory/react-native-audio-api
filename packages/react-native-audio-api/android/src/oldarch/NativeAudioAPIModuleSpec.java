@@ -117,5 +117,9 @@ public abstract class NativeAudioAPIModuleSpec extends ReactContextBaseJavaModul
 
   @ReactMethod
   @DoNotStrip
+  public abstract void isNotificationServiceRunning(String key, Promise promise);
+
+  @ReactMethod
+  @DoNotStrip
   public abstract void readAndroidReleaseAssetBytesAsBase64(String assetPath, Promise promise);
 }

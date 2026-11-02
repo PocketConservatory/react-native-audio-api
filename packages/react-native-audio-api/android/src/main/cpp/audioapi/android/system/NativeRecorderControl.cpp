@@ -1,6 +1,5 @@
 #include <audioapi/android/system/NativeRecorderControl.h>
 
-#include <audioapi/android/core/AndroidAudioRecorder.h>
 #include <audioapi/core/inputs/ActiveRecorderHandle.h>
 #include <audioapi/core/inputs/RecorderState.h>
 
@@ -41,7 +40,7 @@ jint NativeRecorderControl::currentRecorderState(jni::alias_ref<jni::JClass> /*c
 }
 
 jint NativeRecorderControl::activeAudioSessionId(jni::alias_ref<jni::JClass> /*clazz*/) {
-  return AndroidAudioRecorder::activeSessionId();
+  return ActiveRecorderHandle::global().audioSessionId();
 }
 
 } // namespace audioapi

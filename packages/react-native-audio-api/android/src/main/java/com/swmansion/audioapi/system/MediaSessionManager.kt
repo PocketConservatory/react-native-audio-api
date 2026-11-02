@@ -38,6 +38,12 @@ object MediaSessionManager {
   private lateinit var volumeChangeListener: VolumeChangeListener
   private lateinit var playbackNotificationReceiver: PlaybackNotificationReceiver
 
+  /** Whether [volumeChangeListener] is registered; unregistering a receiver twice throws. */
+  private var observesVolumeChanges = false
+
+  /** Whether [playbackNotificationReceiver] is registered; unregistering a receiver twice throws. */
+  private var playbackReceiverRegistered = false
+
   // New notification system
   private lateinit var notificationRegistry: NotificationRegistry
 
@@ -76,6 +82,7 @@ object MediaSessionManager {
         ContextCompat.RECEIVER_NOT_EXPORTED,
       )
     }
+    playbackReceiverRegistered = true
 
     this.audioFocusListener =
       AudioFocusListener(WeakReference(this.audioManager), this.audioAPIModule)
@@ -85,6 +92,29 @@ object MediaSessionManager {
 
     // Initialize new notification system
     this.notificationRegistry = NotificationRegistry(this.reactContext, this.audioAPIModule)
+  }
+
+  /**
+   * Undoes what [initialize] and the observe calls registered, so nothing outlives the module.
+   * Safe before [initialize] and when called twice; a later [initialize] registers afresh.
+   */
+  fun cleanup() {
+    if (::audioFocusListener.isInitialized) {
+      audioFocusListener.abandonAudioFocus()
+    }
+
+    if (::volumeChangeListener.isInitialized) {
+      observeVolumeChanges(false)
+    }
+
+    if (playbackReceiverRegistered) {
+      reactContext.get()?.unregisterReceiver(playbackNotificationReceiver)
+      playbackReceiverRegistered = false
+    }
+
+    if (::recordingSilenceListener.isInitialized) {
+      recordingSilenceListener.release()
+    }
   }
 
   fun getDevicePreferredSampleRate(): Double {
@@ -111,6 +141,10 @@ object MediaSessionManager {
   }
 
   fun observeVolumeChanges(observe: Boolean) {
+    if (observe == observesVolumeChanges) {
+      return
+    }
+
     if (observe) {
       ContextCompat.registerReceiver(
         reactContext.get()!!,
@@ -121,6 +155,8 @@ object MediaSessionManager {
     } else {
       reactContext.get()?.unregisterReceiver(volumeChangeListener)
     }
+
+    observesVolumeChanges = observe
   }
 
   fun requestRecordingPermissions(permissionListener: PermissionListener) {
@@ -295,4 +331,7 @@ object MediaSessionManager {
   }
 
   fun isNotificationActive(key: String): Boolean = notificationRegistry.isNotificationActive(key)
+
+  fun isNotificationServiceRunning(key: String): Boolean =
+    ::notificationRegistry.isInitialized && notificationRegistry.isServiceRunning(key)
 }

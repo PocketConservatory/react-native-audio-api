@@ -105,6 +105,7 @@ class AudioAPIModule(
     reactContext.get()?.removeLifecycleEventListener(this)
     // Cleanup foreground service manager
     ForegroundServiceManager.cleanup()
+    MediaSessionManager.cleanup()
   }
 
   override fun getDevicePreferredSampleRate(): Double = MediaSessionManager.getDevicePreferredSampleRate()
@@ -263,6 +264,17 @@ class AudioAPIModule(
 
       val isActive = MediaSessionManager.isNotificationActive(key)
       promise?.resolve(isActive)
+    } catch (_: Exception) {
+      promise?.resolve(false)
+    }
+  }
+
+  override fun isNotificationServiceRunning(
+    key: String?,
+    promise: Promise?,
+  ) {
+    try {
+      promise?.resolve(key != null && MediaSessionManager.isNotificationServiceRunning(key))
     } catch (_: Exception) {
       promise?.resolve(false)
     }

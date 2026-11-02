@@ -1004,6 +1004,10 @@ class RecordingNotificationManagerMock {
       destroy: noop,
     };
   }
+
+  static isServiceRunning(): Promise<boolean> {
+    return Promise.resolve(false);
+  }
 }
 
 let mockSystemVolumeValue = 0.5;
