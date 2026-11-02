@@ -952,6 +952,14 @@ class AudioManagerMock {
 
   static observeVolumeChanges(_observe: boolean): void {}
 
+  static observeAudioInterruptions(_param: unknown): void {}
+
+  static observeRecordingInterruptions(_enabled: boolean): void {}
+
+  static isRecordingSilenced(): boolean {
+    return false;
+  }
+
   static addSystemEventListener(
     _event: string,
     _callback: (event: { value: number }) => void

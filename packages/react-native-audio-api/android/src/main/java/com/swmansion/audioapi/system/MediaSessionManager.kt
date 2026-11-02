@@ -34,6 +34,7 @@ object MediaSessionManager {
 
   private lateinit var audioManager: AudioManager
   private lateinit var audioFocusListener: AudioFocusListener
+  private lateinit var recordingSilenceListener: RecordingSilenceListener
   private lateinit var volumeChangeListener: VolumeChangeListener
   private lateinit var playbackNotificationReceiver: PlaybackNotificationReceiver
 
@@ -78,6 +79,8 @@ object MediaSessionManager {
 
     this.audioFocusListener =
       AudioFocusListener(WeakReference(this.audioManager), this.audioAPIModule)
+    this.recordingSilenceListener =
+      RecordingSilenceListener(WeakReference(this.audioManager), this.audioAPIModule)
     this.volumeChangeListener = VolumeChangeListener(WeakReference(this.audioManager), this.audioAPIModule)
 
     // Initialize new notification system
@@ -96,6 +99,12 @@ object MediaSessionManager {
   fun abandonAudioFocus() {
     audioFocusListener.abandonAudioFocus()
   }
+
+  fun observeRecordingInterruptions(enabled: Boolean) {
+    recordingSilenceListener.setEnabled(enabled)
+  }
+
+  fun isRecordingSilenced(): Boolean = recordingSilenceListener.isRecordingSilenced()
 
   fun activelyReclaimSession(enabled: Boolean) {
     // do nothing on android

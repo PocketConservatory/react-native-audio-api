@@ -18,6 +18,7 @@ class NativeRecorderControl : public jni::JavaClass<NativeRecorderControl> {
   static jint pauseActiveRecording(jni::alias_ref<jni::JClass>);
   static jint resumeActiveRecording(jni::alias_ref<jni::JClass>);
   static jint currentRecorderState(jni::alias_ref<jni::JClass>);
+  static jint activeAudioSessionId(jni::alias_ref<jni::JClass>);
 };
 
 } // namespace audioapi

@@ -1,5 +1,6 @@
 #include <audioapi/android/system/NativeRecorderControl.h>
 
+#include <audioapi/android/core/AndroidAudioRecorder.h>
 #include <audioapi/core/inputs/ActiveRecorderHandle.h>
 #include <audioapi/core/inputs/RecorderState.h>
 
@@ -19,6 +20,7 @@ void NativeRecorderControl::registerNatives() {
       makeNativeMethod("pauseActiveRecording", NativeRecorderControl::pauseActiveRecording),
       makeNativeMethod("resumeActiveRecording", NativeRecorderControl::resumeActiveRecording),
       makeNativeMethod("currentRecorderState", NativeRecorderControl::currentRecorderState),
+      makeNativeMethod("activeAudioSessionId", NativeRecorderControl::activeAudioSessionId),
   });
 }
 
@@ -36,6 +38,10 @@ jint NativeRecorderControl::resumeActiveRecording(jni::alias_ref<jni::JClass> /*
 
 jint NativeRecorderControl::currentRecorderState(jni::alias_ref<jni::JClass> /*clazz*/) {
   return toOrdinal(ActiveRecorderHandle::global().currentState());
+}
+
+jint NativeRecorderControl::activeAudioSessionId(jni::alias_ref<jni::JClass> /*clazz*/) {
+  return AndroidAudioRecorder::activeSessionId();
 }
 
 } // namespace audioapi

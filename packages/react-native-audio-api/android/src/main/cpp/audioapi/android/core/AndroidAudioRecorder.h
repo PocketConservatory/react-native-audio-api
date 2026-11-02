@@ -6,6 +6,8 @@
 #include <audioapi/utils/AudioBuffer.hpp>
 #include <audioapi/utils/Result.hpp>
 #include <oboe/Oboe.h>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +51,11 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
   void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
 
+  /// @brief Audio session id of the active recorder's input stream, or 0 when no recorder
+  /// session holds a stream. Matches `AudioRecordingConfiguration.getClientAudioSessionId()`.
+  /// Callable from any thread.
+  static int32_t activeSessionId();
+
  protected:
   void clearAdapterScratchState() override;
 
@@ -62,6 +69,11 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   facebook::jni::global_ref<NativeAudioRecorder> nativeAudioRecorder_;
 
   std::shared_ptr<oboe::AudioStream> mStream_;
+  static std::atomic<int32_t> activeSessionId_;
+  /// Session id this recorder published to activeSessionId_; mutated under the recorder locks.
+  int32_t sessionId_ = 0;
+  void releaseActiveSessionId();
+
   std::vector<std::string> recordingSegmentPaths_;
   Result<NoneType, std::string> openAudioStream();
   std::shared_ptr<AudioFileWriter> createFileWriter(

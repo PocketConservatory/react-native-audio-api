@@ -25,6 +25,23 @@
 
 namespace audioapi {
 
+std::atomic<int32_t> AndroidAudioRecorder::activeSessionId_{0};
+
+int32_t AndroidAudioRecorder::activeSessionId() {
+  return activeSessionId_.load(std::memory_order_acquire);
+}
+
+/// @brief Clears the process-wide session id only while it still names this recorder's stream,
+/// so another recorder instance tearing down never hides the active one.
+void AndroidAudioRecorder::releaseActiveSessionId() {
+  if (sessionId_ == 0) {
+    return;
+  }
+  int32_t expected = sessionId_;
+  activeSessionId_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+  sessionId_ = 0;
+}
+
 AndroidAudioRecorder::AndroidAudioRecorder(
     const std::shared_ptr<AudioEventHandlerRegistry> &audioEventHandlerRegistry)
     : AudioRecorder(audioEventHandlerRegistry),
@@ -56,6 +73,7 @@ AndroidAudioRecorder::~AndroidAudioRecorder() {
     mStream_->close();
     mStream_.reset();
   }
+  releaseActiveSessionId();
 }
 
 /// @brief Creates and opens the Oboe audio input stream for recording.
@@ -68,12 +86,17 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
     return Result<NoneType, std::string>::Ok(None);
   }
 
+  // A shared, non-low-latency input is silenced by the system when another client takes the
+  // microphone (reported through the recording configuration), where an exclusive MMAP stream
+  // tends to be disconnected instead. The allocated session id identifies this stream's
+  // recording configuration.
   oboe::AudioStreamBuilder builder;
-  builder.setSharingMode(oboe::SharingMode::Exclusive)
+  builder.setSharingMode(oboe::SharingMode::Shared)
       ->setDirection(oboe::Direction::Input)
       ->setFormat(oboe::AudioFormat::Float)
       ->setFormatConversionAllowed(true)
-      ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+      ->setPerformanceMode(oboe::PerformanceMode::None)
+      ->setSessionId(oboe::SessionId::Allocate)
       ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
       ->setDataCallback(shared_from_this())
       ->setErrorCallback(shared_from_this());
@@ -84,6 +107,9 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
     return Result<NoneType, std::string>::Err(
         "Failed to open audio stream: " + std::string(oboe::convertToText(result)));
   }
+
+  sessionId_ = static_cast<int32_t>(mStream_->getSessionId());
+  activeSessionId_.store(sessionId_, std::memory_order_release);
 
   streamSampleRate_ = static_cast<float>(mStream_->getSampleRate());
   streamChannelCount_ = mStream_->getChannelCount();
@@ -197,6 +223,7 @@ AudioRecorder::StopResult AndroidAudioRecorder::stop() {
       mStream_->close();
       mStream_.reset();
     }
+    releaseActiveSessionId();
 
     if (usesFileOutput()) {
       fileOutputConfigured_.store(false, std::memory_order_release);
@@ -507,27 +534,33 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
     return;
   }
 
-  // A paused session keeps its state across the reclaim: the fresh stream is
-  // left stopped until resume(), instead of forcing the recorder back to recording.
+  // A paused session stays paused across the reclaim: its state is restored,
+  // so the fresh stream runs but writes nothing until resume(). The published
+  // session id keeps naming the old stream until the new one replaces it, so
+  // observers never see the session end in between.
   const auto stateBeforeTeardown = state_.load(std::memory_order_acquire);
 
   cleanup();
 
   if (stateBeforeTeardown == RecorderState::Idle) {
+    releaseActiveSessionId();
     return;
   }
 
   auto streamResult = openAudioStream();
 
   if (!streamResult.is_ok()) {
+    releaseActiveSessionId();
     std::string message = "Android recorder error: " + streamResult.unwrap_err();
     errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
     return;
   }
 
-  if (stateBeforeTeardown == RecorderState::Recording) {
-    mStream_->requestStart();
-  }
+  // Start the fresh stream even when paused: AAudio can't pause an input
+  // stream anyway, and the data callback drops buffers while paused. A stopped
+  // stream drops out of the active recording configurations, so the end of
+  // whatever silenced it (a call) would never be reported.
+  mStream_->requestStart();
   state_.store(stateBeforeTeardown, std::memory_order_release);
 }
 

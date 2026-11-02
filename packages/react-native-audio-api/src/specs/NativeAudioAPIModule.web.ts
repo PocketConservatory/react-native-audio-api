@@ -31,6 +31,8 @@ interface Spec extends TurboModule {
   // Remote commands, system events and interruptions
   observeAudioInterruptions(focusType: AudioFocusType, enabled: boolean): void;
   activelyReclaimSession(enabled: boolean): void;
+  observeRecordingInterruptions(enabled: boolean): void;
+  isRecordingSilenced(): boolean;
   observeVolumeChanges(enabled: boolean): void;
 
   // Permissions
@@ -72,6 +74,8 @@ const NativeAudioAPIModule: Spec = {
   disableSessionManagement: mockSync({}),
   observeAudioInterruptions: mockSync({}),
   activelyReclaimSession: mockSync({}),
+  observeRecordingInterruptions: mockSync({}),
+  isRecordingSilenced: mockSync(false),
   observeVolumeChanges: mockSync({}),
   requestRecordingPermissions: mockAsync('Granted' as PermissionStatus),
   checkRecordingPermissions: mockAsync('Granted' as PermissionStatus),

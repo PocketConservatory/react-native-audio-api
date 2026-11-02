@@ -223,6 +223,16 @@ RCT_EXPORT_METHOD(activelyReclaimSession : (BOOL)enabled)
   [self.notificationManager activelyReclaimSession:enabled];
 }
 
+RCT_EXPORT_METHOD(observeRecordingInterruptions : (BOOL)enabled)
+{
+  // Android only: iOS reports microphone loss through observeAudioInterruptions.
+}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(isRecordingSilenced)
+{
+  return @NO;
+}
+
 RCT_EXPORT_METHOD(observeVolumeChanges : (BOOL)enabled)
 {
   [self.notificationManager observeVolumeChanges:(BOOL)enabled];

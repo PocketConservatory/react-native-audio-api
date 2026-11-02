@@ -79,6 +79,16 @@ export interface IAudioManager {
   disableSessionManagement(): void;
   observeAudioInterruptions(enabled: boolean): void;
   activelyReclaimSession(enabled: boolean): void;
+  /**
+   * Android 10+: emits `interruption` when the recorder's capture is silenced,
+   * without taking audio focus.
+   */
+  observeRecordingInterruptions(enabled: boolean): void;
+  /**
+   * Android 10+: whether the active recording is silenced or the device is in a
+   * call.
+   */
+  isRecordingSilenced(): boolean;
   observeAudioInterruptions(param: AudioFocusType | boolean | null): void;
   addSystemEventListener<Name extends SystemEventName>(
     name: Name,

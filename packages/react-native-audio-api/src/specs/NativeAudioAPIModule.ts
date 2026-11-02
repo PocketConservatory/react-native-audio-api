@@ -31,6 +31,8 @@ interface Spec extends TurboModule {
   // system events and interruptions
   observeAudioInterruptions(focusType: AudioFocusType, enabled: boolean): void;
   activelyReclaimSession(enabled: boolean): void;
+  observeRecordingInterruptions(enabled: boolean): void;
+  isRecordingSilenced(): boolean;
   observeVolumeChanges(enabled: boolean): void;
 
   // Permissions

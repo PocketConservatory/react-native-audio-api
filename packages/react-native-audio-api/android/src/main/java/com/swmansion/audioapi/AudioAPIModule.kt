@@ -149,6 +149,12 @@ class AudioAPIModule(
     }
   }
 
+  override fun observeRecordingInterruptions(enabled: Boolean) {
+    MediaSessionManager.observeRecordingInterruptions(enabled)
+  }
+
+  override fun isRecordingSilenced(): Boolean = MediaSessionManager.isRecordingSilenced()
+
   override fun activelyReclaimSession(enabled: Boolean) {
     MediaSessionManager.activelyReclaimSession(enabled)
   }
