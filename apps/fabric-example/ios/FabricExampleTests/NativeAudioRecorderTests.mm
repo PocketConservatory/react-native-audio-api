@@ -86,9 +86,8 @@
 @property(nonatomic, assign) NSInteger detachInputNodeCallCount;
 @property(nonatomic, assign) NSInteger stopIfPossibleCallCount;
 @property(nonatomic, assign) NSInteger restartAudioEngineCallCount;
-@property(nonatomic, assign) NSInteger pauseIfNecessaryCallCount;
+@property(nonatomic, assign) NSInteger pauseInputCallCount;
 @property(nonatomic, assign) NSInteger rebuildAfterDeactivationCallCount;
-@property(nonatomic, strong) NSMutableArray<NSNumber *> *inputPausedValues;
 @property(nonatomic, assign) NSInteger resumeInputCallCount;
 @property(nonatomic, strong) AVAudioSinkNode *lastAttachedInputNode;
 @property(nonatomic, copy) AVAudioSinkNodeReceiverBlock lastAttachedReceiverBlock;
@@ -124,13 +123,10 @@
   (void)onInputNotification;
 }
 
-- (void)setInputPaused:(BOOL)inputPaused
+- (void)pauseInput
 {
-  if (self.inputPausedValues == nil) {
-    self.inputPausedValues = [[NSMutableArray alloc] init];
-  }
-
-  [self.inputPausedValues addObject:@(inputPaused)];
+  self.pauseInputCallCount += 1;
+  self.state = AudioEngineStatePaused;
 }
 
 - (bool)resumeInput
@@ -170,12 +166,6 @@
 - (void)restartAudioEngine
 {
   self.restartAudioEngineCallCount += 1;
-}
-
-- (void)pauseIfNecessary
-{
-  self.pauseIfNecessaryCallCount += 1;
-  self.state = AudioEngineStatePaused;
 }
 
 @end
@@ -439,8 +429,7 @@ static void ClearFakeRecorderSharedAudioSession(void)
   [recorder pause];
   XCTAssertTrue([recorder resume]);
 
-  XCTAssertEqual(self.audioEngine.pauseIfNecessaryCallCount, 1);
-  XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES ]));
+  XCTAssertEqual(self.audioEngine.pauseInputCallCount, 1);
   XCTAssertEqual(self.audioEngine.resumeInputCallCount, 1);
   // Re-arming is the owner's decision, taken in the HardwareChanged handler.
   XCTAssertFalse(recorder.inputArmed);
