@@ -50,11 +50,13 @@ typedef NS_ENUM(NSInteger, AudioEngineInterruptionEndOutcome) {
                          (void (^)(AudioEngineInputNotification))onInputNotification;
 - (void)detachInputNode;
 - (AVAudioFormat *)getLiveInputFormat;
-/// Marks the attached input as paused by its recorder. A paused input is left out of the live
-/// graph from the next start on (a player starting the engine does not turn the microphone on),
-/// gets no input notifications, and is never restarted by interruption recovery; only the
-/// recorder's resume clears the mark, and the next start brings the input back.
-- (void)setInputPaused:(BOOL)inputPaused;
+/// Marks the attached input as paused by its recorder and turns it off, leaving every other
+/// consumer as it was: a running engine that plays sources is rebuilt without the input and keeps
+/// running, one whose only consumer is the input is paused, and an engine that is not running
+/// keeps its state. A paused input is left out of the live graph (a player starting the engine
+/// does not turn the microphone on), gets no input notifications, and is never restarted by
+/// interruption recovery; only `resumeInput` clears the mark.
+- (void)pauseInput;
 /// Clears the input's paused mark and starts the engine with the input live. Leaves the engine
 /// state and the paused mark as they were unless the engine starts.
 - (bool)resumeInput;
@@ -72,7 +74,6 @@ typedef NS_ENUM(NSInteger, AudioEngineInterruptionEndOutcome) {
 - (bool)isEngineRunning;
 
 - (bool)startIfNecessary;
-- (void)pauseIfNecessary;
 - (void)stopIfNecessary;
 
 - (void)stopIfPossible;

@@ -355,17 +355,44 @@ static AudioEngine *_sharedInstance = nil;
   return [self liveInputFormat];
 }
 
-- (void)setInputPaused:(BOOL)inputPaused
+// Pausing an input turns the microphone off and leaves every other consumer as it was. A
+// running engine with sources is rebuilt without the input and keeps playing; one whose only
+// consumer is the input is paused; an engine that is not running keeps its state, so an
+// Interrupted one stays Interrupted for interruption-end and foreground recovery. If the rebuilt
+// engine fails to start, the engine reports Paused rather than Running over stopped playback;
+// the failure is logged and the next start (a player or resumeInput) rebuilds and restarts it.
+- (void)pauseInput
 {
   std::scoped_lock lock(_engineLock);
+  AudioEngineInputRegistration *registration = self.inputRegistration;
 
-  if (self.inputRegistration == nil || self.inputRegistration.inputPaused == inputPaused) {
+  if (registration == nil || registration.inputPaused) {
     return;
   }
 
-  self.inputRegistration.inputPaused = inputPaused;
-  // The live graph gains or loses the input on the next start.
+  registration.inputPaused = YES;
+  // The live graph loses the input on the next build.
   self.graphNeedsRebuild = true;
+
+  if (self.state != AudioEngineState::AudioEngineStateRunning) {
+    return;
+  }
+
+  if (![self hasSources]) {
+    if (self.audioEngine != nil) {
+      [self.audioEngine pause];
+    }
+
+    self.state = AudioEngineState::AudioEngineStatePaused;
+    return;
+  }
+
+  [self rebuildAudioEngineAndResumeIfNeeded];
+
+  if (self.audioEngine == nil || ![self.audioEngine isRunning]) {
+    NSLog(@"Error while restarting the audio engine without the paused input");
+    self.state = AudioEngineState::AudioEngineStatePaused;
+  }
 }
 
 // Resuming an input leaves the engine state and the input's paused mark exactly as they were
@@ -642,22 +669,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 
   return false;
-}
-
-- (void)pauseIfNecessary
-{
-  std::scoped_lock lock(_engineLock);
-  // Only a running engine is paused: an interrupted one must stay Interrupted so
-  // onInterruptionEnd still rebuilds and restarts it.
-  if (self.state != AudioEngineState::AudioEngineStateRunning) {
-    return;
-  }
-
-  if (self.audioEngine != nil) {
-    [self.audioEngine pause];
-  }
-
-  self.state = AudioEngineState::AudioEngineStatePaused;
 }
 
 - (void)stopIfNecessary
