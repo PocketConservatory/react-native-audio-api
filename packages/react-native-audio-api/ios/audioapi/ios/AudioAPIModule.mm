@@ -342,8 +342,8 @@ RCT_EXPORT_METHOD(
 }
 
 RCT_EXPORT_METHOD(
-    isNotificationServiceRunning : (NSString *)key resolve : (
-        RCTPromiseResolveBlock)resolve reject : (RCTPromiseRejectBlock)reject)
+    isNotificationServiceRunning : (NSString *)key resolve : (RCTPromiseResolveBlock)
+        resolve reject : (RCTPromiseRejectBlock)reject)
 {
   resolve(@NO);
 }

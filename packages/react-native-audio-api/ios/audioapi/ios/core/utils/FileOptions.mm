@@ -173,9 +173,10 @@ NSURL *getFileURL(
   NSString *fileExtension = getFileExtension(properties);
 
   if (fileNameOverride.length() > 0 && properties->rotateIntervalBytes == 0) {
-    NSString *fileName = [NSString stringWithFormat:@"%@.%@",
-        [NSString stringWithUTF8String:fileNameOverride.c_str()],
-        fileExtension];
+    NSString *fileName =
+        [NSString stringWithFormat:@"%@.%@",
+                                   [NSString stringWithUTF8String:fileNameOverride.c_str()],
+                                   fileExtension];
     return [directoryURL URLByAppendingPathComponent:fileName];
   }
 
@@ -184,12 +185,12 @@ NSURL *getFileURL(
   NSURL *fileURL = [directoryURL URLByAppendingPathComponent:fileName];
 
   for (NSUInteger suffix = 1; [[NSFileManager defaultManager] fileExistsAtPath:fileURL.path];
-      ++suffix) {
+       ++suffix) {
     fileName = [NSString stringWithFormat:@"%@_%@_%lu.%@",
-        fileNamePrefix,
-        timestamp,
-        (unsigned long)suffix,
-        fileExtension];
+                                          fileNamePrefix,
+                                          timestamp,
+                                          (unsigned long)suffix,
+                                          fileExtension];
     fileURL = [directoryURL URLByAppendingPathComponent:fileName];
   }
 

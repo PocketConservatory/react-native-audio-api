@@ -221,17 +221,17 @@ static AudioSessionManager *_sharedInstance = nil;
   NSArray<AVAudioSessionPortDescription *> *outputs = route != nil ? route.outputs : @[];
 
   return [NSString stringWithFormat:
-          @"session={active=%@, shouldManage=%@, category=%@, mode=%@, options=%lu, "
-          @"sampleRate=%f, inputChannels=%lu}; route={inputs=%@, outputs=%@}",
-      self.isActive ? @"true" : @"false",
-      self.shouldManageSession ? @"true" : @"false",
-      self.audioSession.category ?: @"(null)",
-      self.audioSession.mode ?: @"(null)",
-      (unsigned long)self.audioSession.categoryOptions,
-      self.audioSession.sampleRate,
-      (unsigned long)self.audioSession.inputNumberOfChannels,
-      [self formatPorts:inputs],
-      [self formatPorts:outputs]];
+                       @"session={active=%@, shouldManage=%@, category=%@, mode=%@, options=%lu, "
+                       @"sampleRate=%f, inputChannels=%lu}; route={inputs=%@, outputs=%@}",
+                       self.isActive ? @"true" : @"false",
+                       self.shouldManageSession ? @"true" : @"false",
+                       self.audioSession.category ?: @"(null)",
+                       self.audioSession.mode ?: @"(null)",
+                       (unsigned long)self.audioSession.categoryOptions,
+                       self.audioSession.sampleRate,
+                       (unsigned long)self.audioSession.inputNumberOfChannels,
+                       [self formatPorts:inputs],
+                       [self formatPorts:outputs]];
 }
 
 - (id)microphoneUsageDescriptionValue
@@ -313,9 +313,9 @@ static AudioSessionManager *_sharedInstance = nil;
 
   for (AVAudioSessionPortDescription *port in ports) {
     [formattedPorts addObject:[NSString stringWithFormat:@"%@(%@,%@)",
-                                  port.portName ?: @"unknown",
-                                  port.portType ?: @"unknown",
-                                  port.UID ?: @"unknown"]];
+                                                         port.portName ?: @"unknown",
+                                                         port.portType ?: @"unknown",
+                                                         port.UID ?: @"unknown"]];
   }
 
   return [NSString stringWithFormat:@"[%@]", [formattedPorts componentsJoinedByString:@", "]];
