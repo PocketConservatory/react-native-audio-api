@@ -3,6 +3,8 @@
 #import <audioapi/core/OfflineAudioContext.h>
 #import <audioapi/ios/core/IOSAudioRecorder.h>
 #import <audioapi/ios/core/NativeAudioRecorder.h>
+#import <audioapi/ios/core/utils/IOSFileWriter.h>
+#import <audioapi/ios/core/utils/IOSRotatingFileWriter.h>
 #import <audioapi/ios/system/AudioEngine.h>
 #import <audioapi/ios/system/AudioSessionManager.h>
 #import <audioapi/core/inputs/AudioRecorder.h>
@@ -215,6 +217,17 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 }
 
 @end
+
+class TestableIOSRotatingFileWriter : public IOSRotatingFileWriter {
+ public:
+  using IOSRotatingFileWriter::IOSRotatingFileWriter;
+
+  /// Leaves the segment closed, as a rotation whose next open failed does.
+  void closeCurrentSegment()
+  {
+    currentWriter_->closeFile();
+  }
+};
 
 class TestableIOSAudioRecorder : public IOSAudioRecorder {
  public:
@@ -666,6 +679,44 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
   XCTAssertEqual(_recorder->currentFilePath(), "");
 
   [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+}
+
+- (void)testRotatingWriterReprepareReportsSegmentItOpensForClosedWriter
+{
+  auto properties = [self validFileProperties];
+  std::vector<std::string> openedPaths;
+  auto writer = std::make_shared<TestableIOSRotatingFileWriter>(
+      nullptr,
+      properties,
+      1024 * 1024,
+      [](const std::shared_ptr<AudioFileProperties> &p) {
+        return std::make_shared<IOSFileWriter>(nullptr, p);
+      },
+      [&openedPaths](const std::string &path) { openedPaths.push_back(path); });
+  AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100
+                                                                         channels:2];
+  NSString *uuid = [[NSUUID UUID] UUIDString];
+  std::string prefix = [[NSString stringWithFormat:@"rotating-reprepare-%@", uuid] UTF8String];
+
+  XCTAssertTrue(writer->openFile(format, 512, prefix).is_ok());
+  XCTAssertEqual(openedPaths.size(), 1U);
+
+  // An open segment keeps its file across a format change.
+  XCTAssertTrue(writer->reprepareStreamFormat(format, 512).is_ok());
+  XCTAssertEqual(openedPaths.size(), 1U);
+
+  writer->closeCurrentSegment();
+  auto reopened = writer->reprepareStreamFormat(format, 512);
+
+  XCTAssertTrue(reopened.is_ok());
+  XCTAssertEqual(openedPaths.size(), 2U);
+  XCTAssertEqual(openedPaths.back(), reopened.unwrap());
+  XCTAssertNotEqual(openedPaths.front(), openedPaths.back());
+
+  writer->closeFile();
+  for (const auto &path : openedPaths) {
+    [[NSFileManager defaultManager] removeItemAtPath:NSStringFromStdString(path) error:nil];
+  }
 }
 
 - (void)testStartReturnsCallbackPreparationFailureForInvalidCallbackFormat

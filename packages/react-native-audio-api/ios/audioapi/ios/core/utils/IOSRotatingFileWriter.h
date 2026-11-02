@@ -30,6 +30,8 @@ class IOSRotatingFileWriter : public IOSFileWriter, public RotatingFileWriter {
       AVAudioFormat *streamFormat,
       size_t streamMaxBufferSizeInFrames,
       const std::string &fileNameOverride) override;
+  /// Re-points the open segment at a new input format, keeping its file; a closed segment (a
+  /// rotation whose next open failed) is replaced by a newly opened, reported segment.
   OpenFileResult reprepareStreamFormat(
       AVAudioFormat *streamFormat,
       size_t streamMaxBufferSizeInFrames);

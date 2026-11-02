@@ -55,10 +55,16 @@ OpenFileResult IOSRotatingFileWriter::reprepareStreamFormat(
 
   if (currentWriter_ == nullptr) {
     currentWriter_ = writerFactory_(fileProperties_);
-    return openInnerWriter();
   }
 
   auto inner = std::static_pointer_cast<IOSFileWriter>(currentWriter_);
+
+  // A rotation whose next segment failed to open leaves the inner writer closed. Opening a
+  // segment goes through openInnerWriter() alone, so every opened file is reported.
+  if (!inner->isFileOpen()) {
+    return openInnerWriter();
+  }
+
   return inner->reopenForInputFormatChange(streamFormat_, streamMaxBufferSizeInFrames_);
 }
 

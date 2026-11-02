@@ -52,6 +52,8 @@ class IOSFileWriter : public AudioFileWriter {
   std::string getFilePath() const override;
   size_t getFileSizeBytes() const override;
 
+  using AudioFileWriter::isFileOpen;
+
  protected:
   size_t converterInputBufferSize_;
   size_t converterOutputBufferSize_;
