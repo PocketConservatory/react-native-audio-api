@@ -294,7 +294,7 @@ useEffect(() => {
 }, []);
 ```
 
-**Recording (iOS):** native always attempts to resume the engine on `ended`, and again on the next foreground while a delivered `ended` left it `Interrupted`. It restores engine and session state only, never recorder state: a recorder paused with `Recorder.pause()` (also during the interruption) stays paused and its input stays out of the engine graph (a player playing through the same engine resumes alone, without the microphone); the app resumes the recorder after `ended`. A recorder that was not paused resumes natively. Fork deviation from upstream: an `ended` the OS delivered always reaches JS with the OS's `shouldResume`, even when native recovery failed, so an app that resumes on `ended` keeps its signal; `began` is emitted only when a running engine was actually interrupted.
+**Recording (iOS):** native always attempts to resume the engine on `ended`, and again on the next foreground while a delivered `ended` left it `Interrupted`. It restores engine and session state only, never recorder state: a recorder paused with `Recorder.pause()` (also during the interruption) stays paused and its input stays out of the engine graph (a player playing through the same engine resumes alone, without the microphone); the app resumes the recorder after `ended`. A recorder that was not paused resumes natively. Fork deviation from upstream: an `ended` the OS delivered reaches JS with the OS's `shouldResume` even when native recovery failed, so an app that resumes on `ended` keeps its signal (an end that finds nothing interrupted is not emitted); `began` is emitted only when a running engine was actually interrupted.
 
 ## Shared UI Components
 

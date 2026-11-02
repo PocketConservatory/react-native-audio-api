@@ -488,6 +488,38 @@ static void ClearFakeSharedAudioSession(void)
   XCTAssertEqualObjects(self.module.lastEventBody[@"shouldResume"], @YES);
 }
 
+- (void)testHandleInterruptionEndedDoesNotEmitWhenNothingWasInterrupted
+{
+  [self.manager observeAudioInterruptions:YES];
+  self.fakeAudioEngine.interruptionEndOutcome = AudioEngineInterruptionEndOutcomeNoOp;
+
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeEnded
+                                                                   option:AVAudioSessionInterruptionOptionShouldResume]];
+  [self flushMainQueue];
+
+  XCTAssertEqual(self.fakeAudioEngine.interruptionEndCallCount, 1);
+  XCTAssertEqual(self.module.eventInvocationCount, 0);
+}
+
+- (void)testRepeatedEndFromTwoSourcesEmitsEndedOnce
+{
+  [self.manager observeAudioInterruptions:YES];
+  self.fakeAudioEngine.interruptionEndOutcome = AudioEngineInterruptionEndOutcomeRunning;
+
+  [self.manager
+      handleSecondaryAudio:[self secondaryAudioNotificationWithType:
+                                     AVAudioSessionSilenceSecondaryAudioHintTypeEnd]];
+  [self flushMainQueue];
+  self.fakeAudioEngine.interruptionEndOutcome = AudioEngineInterruptionEndOutcomeNoOp;
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeEnded
+                                                                   option:AVAudioSessionInterruptionOptionShouldResume]];
+  [self flushMainQueue];
+
+  XCTAssertEqual(self.fakeAudioEngine.interruptionEndCallCount, 2);
+  XCTAssertEqual(self.module.eventInvocationCount, 1);
+  XCTAssertEqualObjects(self.module.lastEventBody[@"type"], @"ended");
+}
+
 - (void)testHandleInterruptionEndedEmitsWhenPausedAfterPoliteNonResume
 {
   [self.manager observeAudioInterruptions:YES];

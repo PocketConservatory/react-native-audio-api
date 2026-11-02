@@ -89,6 +89,7 @@
 @property(nonatomic, assign) NSInteger pauseIfNecessaryCallCount;
 @property(nonatomic, assign) NSInteger rebuildAfterDeactivationCallCount;
 @property(nonatomic, strong) NSMutableArray<NSNumber *> *inputPausedValues;
+@property(nonatomic, assign) NSInteger resumeInputCallCount;
 @property(nonatomic, strong) AVAudioSinkNode *lastAttachedInputNode;
 @property(nonatomic, copy) AVAudioSinkNodeReceiverBlock lastAttachedReceiverBlock;
 
@@ -130,6 +131,12 @@
   }
 
   [self.inputPausedValues addObject:@(inputPaused)];
+}
+
+- (bool)resumeInput
+{
+  self.resumeInputCallCount += 1;
+  return [self startIfNecessary];
 }
 
 - (bool)startIfNecessary
@@ -433,15 +440,13 @@ static void ClearFakeRecorderSharedAudioSession(void)
   XCTAssertTrue([recorder resume]);
 
   XCTAssertEqual(self.audioEngine.pauseIfNecessaryCallCount, 1);
-  // The restart rebuilds the graph with the input the pause left out.
-  XCTAssertEqual(self.audioEngine.stopIfNecessaryCallCount, 1);
-  XCTAssertEqual(self.audioEngine.startIfNecessaryCallCount, 1);
-  XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES, @NO ]));
+  XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES ]));
+  XCTAssertEqual(self.audioEngine.resumeInputCallCount, 1);
   // Re-arming is the owner's decision, taken in the HardwareChanged handler.
   XCTAssertFalse(recorder.inputArmed);
 }
 
-- (void)testResumeReturnsFalseAndKeepsInputPausedWhenEngineStartFails
+- (void)testResumeReturnsFalseWhenEngineStartFails
 {
   NativeAudioRecorder *recorder =
       [[NativeAudioRecorder alloc] initWithReceiverBlock:^(const AudioBufferList *inputBuffer,
@@ -452,7 +457,7 @@ static void ClearFakeRecorderSharedAudioSession(void)
   self.audioEngine.startIfNecessaryResult = NO;
 
   XCTAssertFalse([recorder resume]);
-  XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES, @NO, @YES ]));
+  XCTAssertEqual(self.audioEngine.resumeInputCallCount, 1);
   XCTAssertFalse(recorder.inputArmed);
 }
 

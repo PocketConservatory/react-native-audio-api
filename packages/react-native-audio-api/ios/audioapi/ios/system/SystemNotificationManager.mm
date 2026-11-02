@@ -170,9 +170,10 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   });
 }
 
-/// Native recovery always runs. An end the OS delivered always reaches JS, even when the
-/// recovery failed, so an app that resumes on `ended` keeps its signal; a foreground retry
-/// reaches JS only when it changed the engine state.
+/// Native recovery always runs. An end that changed the engine state reaches JS, and so does an
+/// end the OS delivered whose recovery failed, so an app that resumes on `ended` keeps its
+/// signal; an end that found nothing interrupted (NoOp) never does, so a repeated end or one
+/// without an emitted `began` stays silent.
 - (void)handleInterruptionEnd:(bool)shouldResume deliveredByOS:(bool)deliveredByOS
 {
   AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
@@ -180,8 +181,9 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   dispatch_async(dispatch_get_main_queue(), ^{
     self.interruptionEndedDelivered = true;
     AudioEngineInterruptionEndOutcome outcome = [audioEngine onInterruptionEnd:shouldResume];
-    if (deliveredByOS || outcome == AudioEngineInterruptionEndOutcomeRunning ||
-        outcome == AudioEngineInterruptionEndOutcomePaused) {
+    if (outcome == AudioEngineInterruptionEndOutcomeRunning ||
+        outcome == AudioEngineInterruptionEndOutcomePaused ||
+        (deliveredByOS && outcome == AudioEngineInterruptionEndOutcomeStillInterrupted)) {
       [self emitInterruptionEnded:shouldResume];
     }
   });

@@ -55,6 +55,9 @@ typedef NS_ENUM(NSInteger, AudioEngineInterruptionEndOutcome) {
 /// gets no input notifications, and is never restarted by interruption recovery; only the
 /// recorder's resume clears the mark, and the next start brings the input back.
 - (void)setInputPaused:(BOOL)inputPaused;
+/// Clears the input's paused mark and starts the engine with the input live. Leaves the engine
+/// state and the paused mark as they were unless the engine starts.
+- (bool)resumeInput;
 
 /// @return true if the engine transitioned from Running to Interrupted.
 - (bool)onInterruptionBegin;

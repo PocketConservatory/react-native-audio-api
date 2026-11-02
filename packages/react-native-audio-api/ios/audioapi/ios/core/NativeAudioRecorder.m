@@ -170,17 +170,7 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
   AudioEngine *audioEngine = [AudioEngine sharedInstance];
   assert(audioEngine != nil);
 
-  [audioEngine setInputPaused:NO];
-  // A running engine (a player) was built without the paused input; restart it so the
-  // rebuild brings the input back.
-  [audioEngine stopIfNecessary];
-
-  if (![audioEngine startIfNecessary]) {
-    [audioEngine setInputPaused:YES];
-    return NO;
-  }
-
-  return YES;
+  return [audioEngine resumeInput];
 }
 
 - (void)cleanup

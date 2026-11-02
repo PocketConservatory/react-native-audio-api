@@ -368,6 +368,39 @@ static AudioEngine *_sharedInstance = nil;
   self.graphNeedsRebuild = true;
 }
 
+// Resuming an input leaves the engine state and the input's paused mark exactly as they were
+// unless the engine starts: an Interrupted engine stays Interrupted (its interruption-end and
+// foreground recovery still apply), a Paused or Idle one stays so, and an input that was never
+// paused is never marked paused. Only a Running engine whose graph left the paused input out is
+// stopped, to be rebuilt with it.
+- (bool)resumeInput
+{
+  std::scoped_lock lock(_engineLock);
+  AudioEngineInputRegistration *registration = self.inputRegistration;
+
+  if (registration == nil) {
+    return false;
+  }
+
+  const BOOL wasPaused = registration.inputPaused;
+  registration.inputPaused = NO;
+
+  if (wasPaused) {
+    self.graphNeedsRebuild = true;
+
+    if (self.state == AudioEngineState::AudioEngineStateRunning) {
+      [self stopEngine];
+    }
+  }
+
+  if ([self startIfNecessary]) {
+    return true;
+  }
+
+  registration.inputPaused = wasPaused;
+  return false;
+}
+
 - (bool)onInterruptionBegin
 {
   std::scoped_lock lock(_engineLock);
