@@ -46,6 +46,7 @@
 @property(nonatomic, assign) NSInteger stopCallCount;
 @property(nonatomic, assign) NSInteger pauseCallCount;
 @property(nonatomic, assign) NSInteger resetCallCount;
+@property(nonatomic, assign) NSInteger inputNodeAccessCount;
 @property(nonatomic, strong)
     NSMutableArray<AVAudioNode *> *recordedAttachedNodes;
 @property(nonatomic, strong)
@@ -86,6 +87,7 @@
 }
 
 - (AVAudioInputNode *)inputNode {
+  self.inputNodeAccessCount += 1;
   return (AVAudioInputNode *)self.fakeInputNode;
 }
 
@@ -422,7 +424,7 @@
   NSString *sourceNodeId = [self attachSourceNodeToAudioEngine];
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   self.audioEngine.graphNeedsRebuild = YES;
 
   [self.audioEngine detachSourceNodeWithId:sourceNodeId];
@@ -436,7 +438,7 @@
   FakeAudioEngine *fakeEngine = self.audioEngine.currentFakeAudioEngine;
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
 
   AVAudioSinkNode *inputNode = self.audioEngine.inputNode;
   XCTAssertNotNil(inputNode);
@@ -457,7 +459,7 @@
 
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
 
   XCTAssertNil(self.audioEngine.inputNode);
   XCTAssertEqual(fakeEngine.attachNodeCallCount, 0);
@@ -486,7 +488,7 @@
 - (void)testDetachInputNodeClearsGraphOnlyWhenNoSourcesRemain {
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   self.audioEngine.graphNeedsRebuild = YES;
 
   [self.audioEngine detachInputNode];
@@ -497,7 +499,7 @@
   [self attachSourceNodeToAudioEngine];
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   self.audioEngine.graphNeedsRebuild = YES;
 
   [self.audioEngine detachInputNode];
@@ -512,7 +514,7 @@
   self.audioEngine.state = AudioEngineStateRunning;
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
 
   [self.audioEngine onSessionDeactivated];
   [self.audioEngine detachInputNode];
@@ -523,15 +525,15 @@
 }
 
 - (void)testOnInterruptionBeginOnlyTransitionsFromRunning {
-  [self.audioEngine onInterruptionBegin];
+  XCTAssertFalse([self.audioEngine onInterruptionBegin]);
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateIdle);
 
   self.audioEngine.state = AudioEngineStatePaused;
-  [self.audioEngine onInterruptionBegin];
+  XCTAssertFalse([self.audioEngine onInterruptionBegin]);
   XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
 
   self.audioEngine.state = AudioEngineStateRunning;
-  [self.audioEngine onInterruptionBegin];
+  XCTAssertTrue([self.audioEngine onInterruptionBegin]);
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
 }
 
@@ -583,6 +585,18 @@
   XCTAssertTrue(self.audioEngine.sessionDeactivationInvalidatedGraph);
 }
 
+- (void)testOnSessionDeactivatedTransitionsInterruptedToPaused {
+  FakeAudioEngine *fakeEngine = self.audioEngine.currentFakeAudioEngine;
+  fakeEngine.fakeRunning = NO;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  [self.audioEngine onSessionDeactivated];
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertEqual(fakeEngine.pauseCallCount, 0);
+  XCTAssertTrue(self.audioEngine.sessionDeactivationInvalidatedGraph);
+}
+
 - (void)
     testOnSessionDeactivatedMarksStoppedGraphForRebuildWhenNodesAreAttached {
   FakeAudioEngine *fakeEngine = self.audioEngine.currentFakeAudioEngine;
@@ -601,7 +615,8 @@
 - (void)testOnInterruptionEndNoOpsUnlessInterrupted {
   FakeAudioEngine *fakeEngine = self.audioEngine.currentFakeAudioEngine;
 
-  [self.audioEngine onInterruptionEnd:true];
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeNoOp);
 
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateIdle);
   XCTAssertEqual(fakeEngine.resetCallCount, 0);
@@ -615,7 +630,8 @@
   oldEngine.fakeRunning = YES;
   self.audioEngine.state = AudioEngineStateInterrupted;
 
-  [self.audioEngine onInterruptionEnd:false];
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:false],
+                 AudioEngineInterruptionEndOutcomePaused);
 
   XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
   XCTAssertEqual(oldEngine.stopCallCount, 1);
@@ -632,7 +648,8 @@
   oldEngine.fakeRunning = YES;
   self.audioEngine.state = AudioEngineStateInterrupted;
 
-  [self.audioEngine onInterruptionEnd:true];
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
 
   FakeAudioEngine *newEngine = self.audioEngine.currentFakeAudioEngine;
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
@@ -642,7 +659,7 @@
   XCTAssertEqual(self.audioEngine.createdFakeEngines.count, 2UL);
 }
 
-- (void)testOnInterruptionEndWithResumeFailureEndsIdle {
+- (void)testOnInterruptionEndWithResumeFailureStaysInterrupted {
   [self attachSourceNodeToAudioEngine];
 
   self.audioEngine.state = AudioEngineStateInterrupted;
@@ -651,9 +668,274 @@
   self.audioEngine.nextCreatedEngineStartError =
       [NSError errorWithDomain:@"AudioEngineTests" code:5 userInfo:nil];
 
-  [self.audioEngine onInterruptionEnd:true];
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeStillInterrupted);
 
-  XCTAssertEqual(self.audioEngine.state, AudioEngineStateIdle);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+}
+
+- (void)testOnInterruptionEndWithFailedActivationStaysInterrupted {
+  [self attachSourceNodeToAudioEngine];
+
+  FakeAudioEngine *oldEngine = self.audioEngine.currentFakeAudioEngine;
+  oldEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+  self.sessionManager.ensureActiveResult = NO;
+  self.sessionManager.ensureActiveFailure =
+      [NSError errorWithDomain:@"AudioEngineTests" code:8 userInfo:nil];
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeStillInterrupted);
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+  XCTAssertEqual(oldEngine.stopCallCount, 0);
+  XCTAssertEqual(self.audioEngine.createdFakeEngines.count, 1UL);
+}
+
+- (void)testOnInterruptionEndKeepsPausedInputOutOfGraphAndUnnotified {
+  __block NSInteger notificationCount = 0;
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      notificationCount += 1;
+                    }];
+  [self.audioEngine setInputPaused:YES];
+
+  FakeAudioEngine *oldEngine = self.audioEngine.currentFakeAudioEngine;
+  oldEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomePaused);
+
+  FakeAudioEngine *newEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertNotEqual(newEngine, oldEngine);
+  XCTAssertEqual(newEngine.startCallCount, 0);
+  XCTAssertEqual(newEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+  XCTAssertEqual(notificationCount, 0);
+}
+
+- (void)testOnInterruptionEndResumesSourceWithoutPausedInput {
+  __block NSInteger notificationCount = 0;
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      notificationCount += 1;
+                    }];
+  [self attachSourceNodeToAudioEngine];
+  [self.audioEngine setInputPaused:YES];
+
+  self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  FakeAudioEngine *newEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertEqual(newEngine.startCallCount, 1);
+  XCTAssertEqual(newEngine.inputNodeAccessCount, 0);
+  XCTAssertEqual(newEngine.recordedAttachedNodes.count, 1UL);
+  XCTAssertNil(self.audioEngine.inputNode);
+  XCTAssertEqual(notificationCount, 0);
+}
+
+- (void)testStartWithPausedInputLeavesInputOutOfGraphUntilResume {
+  __block NSInteger notificationCount = 0;
+  __block NSInteger startsSeenByInput = -1;
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      notificationCount += 1;
+                      startsSeenByInput =
+                          self.audioEngine.currentFakeAudioEngine.startCallCount;
+                    }];
+  [self.audioEngine setInputPaused:YES];
+  self.audioEngine.state = AudioEngineStatePaused;
+
+  // A player starts the shared engine while the recorder is paused.
+  [self attachSourceNodeToAudioEngine];
+  XCTAssertTrue([self.audioEngine startIfNecessary]);
+
+  FakeAudioEngine *playbackEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(playbackEngine.startCallCount, 1);
+  XCTAssertEqual(playbackEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+  XCTAssertNil([self.audioEngine getLiveInputFormat]);
+  XCTAssertEqual(notificationCount, 0);
+
+  // The recorder resumes: the restart brings the input back, notified before the start.
+  XCTAssertTrue([self.audioEngine resumeInput]);
+
+  FakeAudioEngine *recordingEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertNotEqual(recordingEngine, playbackEngine);
+  XCTAssertNotNil(self.audioEngine.inputNode);
+  XCTAssertEqual(recordingEngine.startCallCount, 1);
+  XCTAssertEqual(notificationCount, 1);
+  XCTAssertEqual(startsSeenByInput, 0);
+}
+
+- (void)testRestartWhilePausedWithSourcesPlayingExcludesInput {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  [self attachSourceNodeToAudioEngine];
+  [self.audioEngine setInputPaused:YES];
+  self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateRunning;
+
+  [self.audioEngine restartAudioEngine];
+
+  FakeAudioEngine *newEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertEqual(newEngine.startCallCount, 1);
+  XCTAssertEqual(newEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+}
+
+- (void)testFailedResumeOfUnpausedInputKeepsEngineInterruptedAndInputLive {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+  self.sessionManager.ensureActiveResult = NO;
+
+  XCTAssertFalse([self.audioEngine resumeInput]);
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+  XCTAssertNotNil([self.audioEngine getLiveInputFormat]);
+
+  // A player starting the engine later still brings the input with it.
+  self.sessionManager.ensureActiveResult = YES;
+  [self attachSourceNodeToAudioEngine];
+  XCTAssertTrue([self.audioEngine startIfNecessary]);
+  XCTAssertNotNil(self.audioEngine.inputNode);
+  XCTAssertGreaterThan(self.audioEngine.currentFakeAudioEngine.inputNodeAccessCount, 0);
+}
+
+- (void)testFailedResumeOfPausedInputKeepsEnginePausedAndInputPaused {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  [self.audioEngine setInputPaused:YES];
+  self.audioEngine.state = AudioEngineStatePaused;
+  self.sessionManager.ensureActiveResult = NO;
+
+  XCTAssertFalse([self.audioEngine resumeInput]);
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertNil([self.audioEngine getLiveInputFormat]);
+}
+
+- (void)testInputPausedOnBeganSurvivesFailedRecoveryAndResumesAfterRetry {
+  // A recording with a metronome playing through the same engine is interrupted, and the app
+  // pauses the recorder on `began`.
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateRunning;
+  XCTAssertTrue([self.audioEngine onInterruptionBegin]);
+  [self.audioEngine setInputPaused:YES];
+  [self.audioEngine pauseIfNecessary];
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+
+  // The OS end's recovery fails, and so does the app's resume on `ended`.
+  self.sessionManager.ensureActiveResult = NO;
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeStillInterrupted);
+  XCTAssertFalse([self.audioEngine resumeInput]);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+  XCTAssertNil([self.audioEngine getLiveInputFormat]);
+
+  // The foreground retry resumes the metronome alone; the input stays out of the graph.
+  self.sessionManager.ensureActiveResult = YES;
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+  FakeAudioEngine *playbackEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(playbackEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+
+  // The app's next resume restarts the engine with the input live.
+  XCTAssertTrue([self.audioEngine resumeInput]);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertNotEqual(self.audioEngine.currentFakeAudioEngine, playbackEngine);
+  XCTAssertNotNil(self.audioEngine.inputNode);
+  XCTAssertNotNil([self.audioEngine getLiveInputFormat]);
+}
+
+- (void)testInputPausedOnBeganWithoutSourcesEndsPausedAndResumesOnRequest {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateRunning;
+  XCTAssertTrue([self.audioEngine onInterruptionBegin]);
+  [self.audioEngine setInputPaused:YES];
+  [self.audioEngine pauseIfNecessary];
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomePaused);
+
+  self.sessionManager.ensureActiveResult = NO;
+  XCTAssertFalse([self.audioEngine resumeInput]);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertNil([self.audioEngine getLiveInputFormat]);
+
+  self.sessionManager.ensureActiveResult = YES;
+  XCTAssertTrue([self.audioEngine resumeInput]);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertNotNil(self.audioEngine.inputNode);
+}
+
+- (void)testDetachingPausedInputLetsNextRecordingAttachLiveInput {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  [self.audioEngine setInputPaused:YES];
+  [self.audioEngine detachInputNode];
+
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+
+  XCTAssertNotNil(self.audioEngine.inputNode);
+  XCTAssertNotNil([self.audioEngine getLiveInputFormat]);
+  XCTAssertTrue([self.audioEngine startIfNecessary]);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+}
+
+- (void)testOnInterruptionEndResumesInputThatIsNotPaused {
+  __block AudioEngineState stateSeenByInput = AudioEngineStateRunning;
+  __block NSInteger startsSeenByInput = -1;
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      stateSeenByInput = self.audioEngine.state;
+                      startsSeenByInput =
+                          self.audioEngine.currentFakeAudioEngine.startCallCount;
+                    }];
+  [self.audioEngine setInputPaused:YES];
+  [self.audioEngine setInputPaused:NO];
+
+  self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:false],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.startCallCount, 1);
+  // The input is notified before the rebuilt engine starts.
+  XCTAssertNotEqual(stateSeenByInput, AudioEngineStateRunning);
+  XCTAssertEqual(startsSeenByInput, 0);
 }
 
 - (void)testStartIfNecessaryReturnsFalseWhenGraphEmpty {
@@ -736,7 +1018,7 @@
     testStartIfNecessaryRebuildsAfterSessionDeactivationEvenWhenTeardownClearsGraph {
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
 
   FakeAudioEngine *oldEngine = self.audioEngine.currentFakeAudioEngine;
   oldEngine.fakeRunning = YES;
@@ -755,7 +1037,7 @@
   self.audioEngine.nextCreatedEngineInputFormat = recoveredInputFormat;
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   AVAudioSinkNode *recoveredInputNode = self.audioEngine.inputNode;
 
   XCTAssertTrue([self.audioEngine startIfNecessary]);
@@ -778,7 +1060,7 @@
 - (void)testStartIfNecessaryRebuildsInputNodeWithFreshInstance {
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   FakeAudioEngine *oldEngine = self.audioEngine.currentFakeAudioEngine;
   AVAudioSinkNode *oldInputNode = self.audioEngine.inputNode;
   AVAudioFormat *replacementInputFormat =
@@ -830,6 +1112,41 @@
 
   XCTAssertEqual(fakeEngine.pauseCallCount, 1);
   XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+}
+
+- (void)testPauseWhileInterruptedKeepsEngineInterruptedForInterruptionEnd {
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:nil];
+  FakeAudioEngine *fakeEngine = self.audioEngine.currentFakeAudioEngine;
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  [self.audioEngine setInputPaused:YES];
+  [self.audioEngine pauseIfNecessary];
+
+  XCTAssertEqual(fakeEngine.pauseCallCount, 0);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomePaused);
+  XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.startCallCount, 0);
+}
+
+- (void)testRestartAudioEngineKeepsPausedInputStoppedAndUnnotified {
+  __block NSInteger notificationCount = 0;
+  [self.audioEngine
+      attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      notificationCount += 1;
+                    }];
+  [self.audioEngine setInputPaused:YES];
+  self.audioEngine.state = AudioEngineStatePaused;
+
+  [self.audioEngine restartAudioEngine];
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.startCallCount, 0);
+  XCTAssertEqual(notificationCount, 0);
 }
 
 - (void)testStopIfNecessaryNoOpsFromIdle {
@@ -951,10 +1268,12 @@
 
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:^{
-              callbackRan = YES;
-              formatSeenDuringRebuild = [self.audioEngine getLiveInputFormat];
-            }];
+                    onInputNotification:^(
+                        __unused AudioEngineInputNotification notification) {
+                      callbackRan = YES;
+                      formatSeenDuringRebuild =
+                          [self.audioEngine getLiveInputFormat];
+                    }];
 
   self.audioEngine.state = AudioEngineStateRunning;
   self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
@@ -1031,7 +1350,7 @@
     dispatch_group_enter(group);
     dispatch_async(queue, ^{
       [self.audioEngine attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
       [self.audioEngine startIfNecessary];
       dispatch_group_leave(group);
     });
@@ -1079,7 +1398,7 @@
 - (void)testConcurrentLiveInputFormatReadAndRestartDoesNotCrash {
   [self.audioEngine
       attachInputNodeWithReceiverBlock:[self testInputReceiverBlock]
-             onInputConfigurationChange:nil];
+                    onInputNotification:nil];
   self.audioEngine.state = AudioEngineStateRunning;
   self.audioEngine.currentFakeAudioEngine.fakeRunning = YES;
 

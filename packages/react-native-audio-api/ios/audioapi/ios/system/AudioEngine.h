@@ -12,6 +12,18 @@ typedef NS_ENUM(NSInteger, AudioEngineState) {
   AudioEngineStateInterrupted
 };
 
+typedef NS_ENUM(NSInteger, AudioEngineInputNotification) {
+  AudioEngineInputNotificationHardwareChanged = 0,
+};
+
+/// Result of `onInterruptionEnd:`. Distinguishes a no-op from a failed resume that stays Interrupted.
+typedef NS_ENUM(NSInteger, AudioEngineInterruptionEndOutcome) {
+  AudioEngineInterruptionEndOutcomeNoOp = 0,
+  AudioEngineInterruptionEndOutcomeRunning,
+  AudioEngineInterruptionEndOutcomePaused,
+  AudioEngineInterruptionEndOutcomeStillInterrupted
+};
+
 @interface AudioEngine : NSObject
 
 @property (nonatomic, assign) AudioEngineState state;
@@ -34,14 +46,27 @@ typedef NS_ENUM(NSInteger, AudioEngineState) {
 - (void)detachSourceNodeWithId:(NSString *)sourceNodeId;
 
 - (void)attachInputNodeWithReceiverBlock:(AVAudioSinkNodeReceiverBlock)receiverBlock
-              onInputConfigurationChange:(void (^)(void))onInputConfigurationChange;
+                     onInputNotification:
+                         (void (^)(AudioEngineInputNotification))onInputNotification;
 - (void)detachInputNode;
 - (AVAudioFormat *)getLiveInputFormat;
+/// Marks the attached input as paused by its recorder. A paused input is left out of the live
+/// graph from the next start on (a player starting the engine does not turn the microphone on),
+/// gets no input notifications, and is never restarted by interruption recovery; only the
+/// recorder's resume clears the mark, and the next start brings the input back.
+- (void)setInputPaused:(BOOL)inputPaused;
+/// Clears the input's paused mark and starts the engine with the input live. Leaves the engine
+/// state and the paused mark as they were unless the engine starts.
+- (bool)resumeInput;
 
-- (void)onInterruptionBegin;
-- (void)onInterruptionEnd:(bool)shouldResume;
+/// @return true if the engine transitioned from Running to Interrupted.
+- (bool)onInterruptionBegin;
+- (AudioEngineInterruptionEndOutcome)onInterruptionEnd:(bool)shouldResume;
 - (void)onSessionDeactivated;
 - (void)markSessionDeactivationInvalidatedGraph;
+/// Records that hardware format may have changed while the engine must not rebuild
+/// yet (`Interrupted`). The next start or interruption-end resume rebuilds the graph.
+- (void)markGraphNeedsRebuild;
 
 - (AudioEngineState)getState;
 - (bool)isEngineRunning;

@@ -115,7 +115,7 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
 
   [audioEngine stopIfNecessary];
   [audioEngine attachInputNodeWithReceiverBlock:self.receiverSinkBlock
-                     onInputConfigurationChange:self.onInputConfigurationChange];
+                            onInputNotification:self.onInputNotification];
 
   if (![audioEngine startIfNecessary]) {
     [audioEngine detachInputNode];
@@ -161,6 +161,7 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
   assert(audioEngine != nil);
 
   self.inputArmed = NO;
+  [audioEngine setInputPaused:YES];
   [audioEngine pauseIfNecessary];
 }
 
@@ -169,15 +170,7 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
   AudioEngine *audioEngine = [AudioEngine sharedInstance];
   assert(audioEngine != nil);
 
-  if (![audioEngine startIfNecessary]) {
-    return NO;
-  }
-
-  if (self.onInputConfigurationChange != nil) {
-    self.onInputConfigurationChange();
-  }
-
-  return YES;
+  return [audioEngine resumeInput];
 }
 
 - (void)cleanup
@@ -187,7 +180,7 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
   self.resolvedBufferSize = 0;
   self.receiverBlock = nil;
   self.receiverSinkBlock = nil;
-  self.onInputConfigurationChange = nil;
+  self.onInputNotification = nil;
 }
 
 @end

@@ -3,6 +3,8 @@
 #import <audioapi/core/OfflineAudioContext.h>
 #import <audioapi/ios/core/IOSAudioRecorder.h>
 #import <audioapi/ios/core/NativeAudioRecorder.h>
+#import <audioapi/ios/core/utils/IOSFileWriter.h>
+#import <audioapi/ios/core/utils/IOSRotatingFileWriter.h>
 #import <audioapi/ios/system/AudioEngine.h>
 #import <audioapi/ios/system/AudioSessionManager.h>
 #import <audioapi/core/inputs/AudioRecorder.h>
@@ -124,6 +126,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 @property(nonatomic, assign) NSInteger stopCallCount;
 @property(nonatomic, assign) NSInteger pauseCallCount;
 @property(nonatomic, assign) NSInteger resumeCallCount;
+@property(nonatomic, assign) BOOL resumeResult;
 @property(nonatomic, assign) NSInteger cleanupCallCount;
 @property(nonatomic, assign) NSInteger setInputArmedCallCount;
 @property(nonatomic, assign) BOOL lastInputArmed;
@@ -142,9 +145,19 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
         [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
     self.mockResolvedBufferSize = 512;
     self.startResult = YES;
+    self.resumeResult = YES;
   }
 
   return self;
+}
+
+- (BOOL)refreshResolvedInputFormatReturningChanged:(BOOL *)formatChanged
+{
+  if (formatChanged != nil) {
+    *formatChanged = NO;
+  }
+
+  return YES;
 }
 
 - (AVAudioFormat *)getResolvedInputFormat
@@ -194,7 +207,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 - (BOOL)resume
 {
   self.resumeCallCount += 1;
-  return YES;
+  return self.resumeResult;
 }
 
 - (void)cleanup
@@ -204,6 +217,17 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 }
 
 @end
+
+class TestableIOSRotatingFileWriter : public IOSRotatingFileWriter {
+ public:
+  using IOSRotatingFileWriter::IOSRotatingFileWriter;
+
+  /// Leaves the segment closed, as a rotation whose next open failed does.
+  void closeCurrentSegment()
+  {
+    currentWriter_->closeFile();
+  }
+};
 
 class TestableIOSAudioRecorder : public IOSAudioRecorder {
  public:
@@ -283,7 +307,7 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
 
   _recorder = std::make_unique<TestableIOSAudioRecorder>(std::shared_ptr<AudioEventHandlerRegistry>());
   self.originalNativeRecorder = _recorder->replaceNativeRecorder(self.nativeRecorder);
-  self.nativeRecorder.onInputConfigurationChange = self.originalNativeRecorder.onInputConfigurationChange;
+  self.nativeRecorder.onInputNotification = self.originalNativeRecorder.onInputNotification;
 }
 
 - (void)tearDown
@@ -512,6 +536,47 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
 
   XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
   XCTAssertFalse(_recorder->isPaused());
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
+}
+
+- (void)testResumeDoesNotStoreRecordingWhenNativeResumeFails
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->pause();
+  self.nativeRecorder.resumeResult = NO;
+
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertTrue(_recorder->isPaused());
+  XCTAssertFalse(_recorder->isRecording());
+}
+
+- (void)testHardwareChangeKeepsPausedRecorderPausedAndDisarmed
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->pause();
+  NSInteger pausesBefore = self.nativeRecorder.pauseCallCount;
+  NSInteger armsBefore = self.nativeRecorder.setInputArmedCallCount;
+
+  self.nativeRecorder.onInputNotification(AudioEngineInputNotificationHardwareChanged);
+
+  XCTAssertTrue(_recorder->isPaused());
+  XCTAssertEqual(self.nativeRecorder.pauseCallCount, pausesBefore);
+  XCTAssertEqual(self.nativeRecorder.setInputArmedCallCount, armsBefore);
+}
+
+- (void)testHardwareChangeArmsRecordingRecorder
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+
+  self.nativeRecorder.onInputNotification(AudioEngineInputNotificationHardwareChanged);
+
+  XCTAssertTrue(_recorder->isRecording());
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
 }
 
 - (void)testStopReturnsErrorWhileIdle
@@ -614,6 +679,44 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
   XCTAssertEqual(_recorder->currentFilePath(), "");
 
   [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+}
+
+- (void)testRotatingWriterReprepareReportsSegmentItOpensForClosedWriter
+{
+  auto properties = [self validFileProperties];
+  std::vector<std::string> openedPaths;
+  auto writer = std::make_shared<TestableIOSRotatingFileWriter>(
+      nullptr,
+      properties,
+      1024 * 1024,
+      [](const std::shared_ptr<AudioFileProperties> &p) {
+        return std::make_shared<IOSFileWriter>(nullptr, p);
+      },
+      [&openedPaths](const std::string &path) { openedPaths.push_back(path); });
+  AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100
+                                                                         channels:2];
+  NSString *uuid = [[NSUUID UUID] UUIDString];
+  std::string prefix = [[NSString stringWithFormat:@"rotating-reprepare-%@", uuid] UTF8String];
+
+  XCTAssertTrue(writer->openFile(format, 512, prefix).is_ok());
+  XCTAssertEqual(openedPaths.size(), 1U);
+
+  // An open segment keeps its file across a format change.
+  XCTAssertTrue(writer->reprepareStreamFormat(format, 512).is_ok());
+  XCTAssertEqual(openedPaths.size(), 1U);
+
+  writer->closeCurrentSegment();
+  auto reopened = writer->reprepareStreamFormat(format, 512);
+
+  XCTAssertTrue(reopened.is_ok());
+  XCTAssertEqual(openedPaths.size(), 2U);
+  XCTAssertEqual(openedPaths.back(), reopened.unwrap());
+  XCTAssertNotEqual(openedPaths.front(), openedPaths.back());
+
+  writer->closeFile();
+  for (const auto &path : openedPaths) {
+    [[NSFileManager defaultManager] removeItemAtPath:NSStringFromStdString(path) error:nil];
+  }
 }
 
 - (void)testStartReturnsCallbackPreparationFailureForInvalidCallbackFormat

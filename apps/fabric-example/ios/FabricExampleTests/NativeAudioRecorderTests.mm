@@ -88,6 +88,8 @@
 @property(nonatomic, assign) NSInteger restartAudioEngineCallCount;
 @property(nonatomic, assign) NSInteger pauseIfNecessaryCallCount;
 @property(nonatomic, assign) NSInteger rebuildAfterDeactivationCallCount;
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *inputPausedValues;
+@property(nonatomic, assign) NSInteger resumeInputCallCount;
 @property(nonatomic, strong) AVAudioSinkNode *lastAttachedInputNode;
 @property(nonatomic, copy) AVAudioSinkNodeReceiverBlock lastAttachedReceiverBlock;
 
@@ -113,13 +115,28 @@
 }
 
 - (void)attachInputNodeWithReceiverBlock:(AVAudioSinkNodeReceiverBlock)receiverBlock
-             onInputConfigurationChange:(void (^)(void))onInputConfigurationChange
+                    onInputNotification:(void (^)(AudioEngineInputNotification))onInputNotification
 {
   self.attachInputNodeCallCount += 1;
   self.inputNode = [[AVAudioSinkNode alloc] initWithReceiverBlock:receiverBlock];
   self.lastAttachedInputNode = self.inputNode;
   self.lastAttachedReceiverBlock = receiverBlock;
-  (void)onInputConfigurationChange;
+  (void)onInputNotification;
+}
+
+- (void)setInputPaused:(BOOL)inputPaused
+{
+  if (self.inputPausedValues == nil) {
+    self.inputPausedValues = [[NSMutableArray alloc] init];
+  }
+
+  [self.inputPausedValues addObject:@(inputPaused)];
+}
+
+- (bool)resumeInput
+{
+  self.resumeInputCallCount += 1;
+  return [self startIfNecessary];
 }
 
 - (bool)startIfNecessary
@@ -420,11 +437,28 @@ static void ClearFakeRecorderSharedAudioSession(void)
       }];
 
   [recorder pause];
-  [recorder resume];
+  XCTAssertTrue([recorder resume]);
 
   XCTAssertEqual(self.audioEngine.pauseIfNecessaryCallCount, 1);
-  XCTAssertEqual(self.audioEngine.startIfNecessaryCallCount, 1);
-  XCTAssertTrue(recorder.inputArmed);
+  XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES ]));
+  XCTAssertEqual(self.audioEngine.resumeInputCallCount, 1);
+  // Re-arming is the owner's decision, taken in the HardwareChanged handler.
+  XCTAssertFalse(recorder.inputArmed);
+}
+
+- (void)testResumeReturnsFalseWhenEngineStartFails
+{
+  NativeAudioRecorder *recorder =
+      [[NativeAudioRecorder alloc] initWithReceiverBlock:^(const AudioBufferList *inputBuffer,
+                                                           int numFrames){
+      }];
+
+  [recorder pause];
+  self.audioEngine.startIfNecessaryResult = NO;
+
+  XCTAssertFalse([recorder resume]);
+  XCTAssertEqual(self.audioEngine.resumeInputCallCount, 1);
+  XCTAssertFalse(recorder.inputArmed);
 }
 
 - (void)testStartAfterSessionDeactivationUsesRecoveryRebuildPath

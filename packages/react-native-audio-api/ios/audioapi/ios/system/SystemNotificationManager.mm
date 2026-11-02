@@ -1,3 +1,5 @@
+#import <UIKit/UIKit.h>
+
 #import <audioapi/events/AudioEvent.h>
 #import <audioapi/ios/AudioAPIModule.h>
 #import <audioapi/ios/system/AudioEngine.h>
@@ -91,6 +93,14 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
                               selector:@selector(handleInterruption:)
                                   name:AVAudioSessionInterruptionNotification
                                 object:nil];
+  [self.notificationCenter addObserver:self
+                              selector:@selector(handleWillEnterForeground:)
+                                  name:UIApplicationWillEnterForegroundNotification
+                                object:nil];
+  [self.notificationCenter addObserver:self
+                              selector:@selector(handleDidBecomeActive:)
+                                  name:UIApplicationDidBecomeActiveNotification
+                                object:nil];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -111,74 +121,123 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   }
 }
 
-- (void)handleInterruption:(NSNotification *)notification
+- (void)handleWillEnterForeground:(NSNotification *)notification
+{
+  [self retryInterruptedRecordingIfNeeded];
+}
+
+- (void)handleDidBecomeActive:(NSNotification *)notification
+{
+  [self retryInterruptedRecordingIfNeeded];
+}
+
+- (void)emitInterruptionBegan
+{
+  if (!self.audioInterruptionsObserved) {
+    return;
+  }
+
+  [self.audioAPIModule invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
+                                          payload:audioapi::InterruptionPayload{
+                                                      .type = "began", .shouldResume = false}];
+}
+
+- (void)emitInterruptionEnded:(bool)shouldResume
+{
+  if (!self.audioInterruptionsObserved) {
+    return;
+  }
+
+  [self.audioAPIModule
+      invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
+                         payload:audioapi::InterruptionPayload{
+                                     .type = "ended", .shouldResume = shouldResume}];
+}
+
+- (void)handleInterruptionBegin
 {
   AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
   AudioSessionManager *sessionManager = self.audioAPIModule.audioSessionManager;
 
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self.interruptionEndedDelivered = false;
+    bool transitioned = [audioEngine onInterruptionBegin];
+    [sessionManager markInactive];
+    if (transitioned) {
+      self.interruptionShouldResume = nil;
+      [self emitInterruptionBegan];
+    }
+  });
+}
+
+/// Native recovery always runs. An end that changed the engine state reaches JS, and so does an
+/// end the OS delivered whose recovery failed, so an app that resumes on `ended` keeps its
+/// signal; an end that found nothing interrupted (NoOp) never does, so a repeated end or one
+/// without an emitted `began` stays silent.
+- (void)handleInterruptionEnd:(bool)shouldResume deliveredByOS:(bool)deliveredByOS
+{
+  AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self.interruptionEndedDelivered = true;
+    AudioEngineInterruptionEndOutcome outcome = [audioEngine onInterruptionEnd:shouldResume];
+    if (outcome == AudioEngineInterruptionEndOutcomeRunning ||
+        outcome == AudioEngineInterruptionEndOutcomePaused ||
+        (deliveredByOS && outcome == AudioEngineInterruptionEndOutcomeStillInterrupted)) {
+      [self emitInterruptionEnded:shouldResume];
+    }
+  });
+}
+
+- (bool)shouldResumeForInterruptionRecovery
+{
+  if (self.interruptionShouldResume == nil) {
+    return true;
+  }
+
+  return self.interruptionShouldResume.boolValue;
+}
+
+- (void)retryInterruptedRecordingIfNeeded
+{
+  AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
+
+  if (self.interruptionEndedDelivered && [audioEngine getState] == AudioEngineStateInterrupted) {
+    [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery] deliveredByOS:false];
+  }
+}
+
+- (void)handleInterruption:(NSNotification *)notification
+{
   NSInteger interruptionType =
       [notification.userInfo[AVAudioSessionInterruptionTypeKey] integerValue];
   NSInteger interruptionOption =
       [notification.userInfo[AVAudioSessionInterruptionOptionKey] integerValue];
 
   if (interruptionType == AVAudioSessionInterruptionTypeBegan) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [audioEngine onInterruptionBegin];
-      [sessionManager markInactive];
-    });
-
-    if (self.audioInterruptionsObserved) {
-      [self.audioAPIModule invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                                              payload:audioapi::InterruptionPayload{
-                                                          .type = "began", .shouldResume = false}];
-    }
-
+    [self handleInterruptionBegin];
     return;
   }
 
   bool shouldResume = interruptionOption == AVAudioSessionInterruptionOptionShouldResume;
 
-  if (self.audioInterruptionsObserved) {
-    [self.audioAPIModule
-        invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                           payload:audioapi::InterruptionPayload{
-                                       .type = "ended", .shouldResume = shouldResume}];
-  } else {
-    dispatch_async(dispatch_get_main_queue(), ^{ [audioEngine onInterruptionEnd:shouldResume]; });
-  }
+  dispatch_async(dispatch_get_main_queue(), ^{ self.interruptionShouldResume = @(shouldResume); });
+  [self handleInterruptionEnd:shouldResume deliveredByOS:true];
 }
 
 - (void)handleSecondaryAudio:(NSNotification *)notification
 {
-  AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
-  AudioSessionManager *sessionManager = self.audioAPIModule.audioSessionManager;
   NSInteger secondaryAudioType =
       [notification.userInfo[AVAudioSessionSilenceSecondaryAudioHintTypeKey] integerValue];
 
   if (secondaryAudioType == AVAudioSessionSilenceSecondaryAudioHintTypeBegin) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [sessionManager markInactive];
-      [audioEngine onInterruptionBegin];
-    });
-
-    if (self.audioInterruptionsObserved) {
-      [self.audioAPIModule invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                                              payload:audioapi::InterruptionPayload{
-                                                          .type = "began", .shouldResume = false}];
-    }
+    [self handleInterruptionBegin];
     return;
   }
 
   bool shouldResume = secondaryAudioType == AVAudioSessionSilenceSecondaryAudioHintTypeEnd;
 
-  if (self.audioInterruptionsObserved) {
-    [self.audioAPIModule
-        invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                           payload:audioapi::InterruptionPayload{
-                                       .type = "ended", .shouldResume = shouldResume}];
-  } else {
-    dispatch_async(dispatch_get_main_queue(), ^{ [audioEngine onInterruptionEnd:shouldResume]; });
-  }
+  [self handleInterruptionEnd:shouldResume deliveredByOS:true];
 }
 
 - (void)handleRouteChange:(NSNotification *)notification
@@ -253,6 +312,16 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   AudioSessionManager *sessionManager = self.audioAPIModule.audioSessionManager;
 
   dispatch_async(dispatch_get_main_queue(), ^{
+    // A configuration change is an I/O-unit stop, not a resume trigger. Restarting
+    // while Interrupted races with onInterruptionEnd and the foreground retry: it
+    // marks the session inactive and rebuilds a graph that cannot start. Leave
+    // recovery on those paths; remember the format may have changed so they still
+    // rebuild.
+    if ([audioEngine getState] == AudioEngineStateInterrupted) {
+      [audioEngine markGraphNeedsRebuild];
+      return;
+    }
+
     [sessionManager markInactive];
     [audioEngine restartAudioEngine];
   });
@@ -289,32 +358,14 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
     return;
   }
 
-  AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
-  AudioSessionManager *sessionManager = self.audioAPIModule.audioSessionManager;
-
   self.wasOtherAudioPlaying = shouldSilence;
 
   if (shouldSilence) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [sessionManager markInactive];
-      [audioEngine onInterruptionBegin];
-    });
-    if (self.audioInterruptionsObserved) {
-      [self.audioAPIModule invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                                              payload:audioapi::InterruptionPayload{
-                                                          .type = "began", .shouldResume = false}];
-    }
-
+    [self handleInterruptionBegin];
     return;
   }
 
-  if (self.audioInterruptionsObserved) {
-    [self.audioAPIModule invokeHandlerWithEventName:audioapi::AudioEvent::INTERRUPTION
-                                            payload:audioapi::InterruptionPayload{
-                                                        .type = "ended", .shouldResume = true}];
-  } else {
-    dispatch_async(dispatch_get_main_queue(), ^{ [audioEngine onInterruptionEnd:true]; });
-  }
+  [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery] deliveredByOS:true];
 }
 
 @end
