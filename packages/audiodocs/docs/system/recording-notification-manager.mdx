@@ -110,9 +110,12 @@ interface RecordingNotificationInfo {
   pauseIconResourceName?: string;
   resumeIconResourceName?: string;
   color?: number; //
+  appHandlesPauseResume?: boolean;
 }
 ```
 </details>
+
+By default the pause and resume actions pause or resume the recorder natively, then fire `recordingNotificationPause` or `recordingNotificationResume`, so they keep working when no JS is running. Set `appHandlesPauseResume: true` when the app's own state must stay the only owner of the recorder's pause state, for example when it refuses a resume during a call. The actions then only fire their events: the app pauses or resumes the recorder itself and updates the notification with `show({ paused })`. In this mode the buttons do nothing while JS is unreachable, for example after the app's task is removed with `androidFSStopWithTask: false`. The stop and dismiss actions still act natively.
 
 ### `RecordingNotificationEvent`
 

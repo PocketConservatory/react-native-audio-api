@@ -25,9 +25,8 @@ IOSAudioPlayer::IOSAudioPlayer(
       isRunning_(false),
       pendingSaved_(RENDER_QUANTUM_SIZE, channelCount_, sampleRate)
 {
-  RenderAudioBlock renderAudioBlock = ^(AudioBufferList *outputData, int numFrames) {
-    deliverOutputBuffers(outputData, numFrames);
-  };
+  RenderAudioBlock renderAudioBlock = ^(
+      AudioBufferList *outputData, int numFrames) { deliverOutputBuffers(outputData, numFrames); };
 
   audioPlayer_ = [[NativeAudioPlayer alloc] initWithRenderAudio:renderAudioBlock
                                                      sampleRate:sampleRate
