@@ -326,6 +326,8 @@ TEST(ActiveRecorderHandleTest, FailedTryStartRestoresThePreviousSessionSource) {
   failing->streamSessionId = 9;
   failing->failStart = true;
   ASSERT_TRUE(handle.tryStart(failing, "").is_err());
+  // A failed candidate that still reports an id must not stay the source.
+  failing->sessionId = 9;
   EXPECT_EQ(handle.audioSessionId(), 0);
 
   current->streamSessionId = 6;
