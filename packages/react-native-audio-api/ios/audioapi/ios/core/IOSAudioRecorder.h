@@ -8,6 +8,7 @@ typedef struct objc_object AVAudioFile;
 typedef struct objc_object AudioBufferList;
 typedef struct objc_object NativeAudioRecorder;
 typedef struct objc_object AVAudioFormat;
+typedef long AudioEngineInputNotification;
 #endif // __OBJC__
 
 #include <audioapi/core/inputs/AudioRecorder.h>
@@ -61,7 +62,8 @@ class IOSAudioRecorder : public AudioRecorder {
       const std::string &fileNameOverride = "");
   void rollbackFailedStart();
   Result<NoneType, std::string> reprepareForLiveInput();
-  void handleInputConfigurationChange();
+  void handleInputNotification(AudioEngineInputNotification notification);
+  void handleHardwareChange();
   Result<NoneType, std::string> reprepareFileWriter(
       AVAudioFormat *inputFormat,
       int maxInputBufferLength);

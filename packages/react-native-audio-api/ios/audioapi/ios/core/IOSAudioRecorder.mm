@@ -74,7 +74,8 @@ IOSAudioRecorder::IOSAudioRecorder(
 
   nativeRecorder_ = [[NativeAudioRecorder alloc] initWithReceiverBlock:receiverBlock];
 
-  nativeRecorder_.onInputConfigurationChange = ^{ this->handleInputConfigurationChange(); };
+  nativeRecorder_.onInputNotification =
+      ^(AudioEngineInputNotification notification) { this->handleInputNotification(notification); };
 }
 
 void IOSAudioRecorder::runSideEffects(const AudioBufferList *inputBuffer, int numFrames)
@@ -108,16 +109,21 @@ void IOSAudioRecorder::runSideEffects(const AudioBufferList *inputBuffer, int nu
   }
 }
 
-void IOSAudioRecorder::handleInputConfigurationChange()
+void IOSAudioRecorder::handleInputNotification(AudioEngineInputNotification notification)
+{
+  switch (notification) {
+    case AudioEngineInputNotificationHardwareChanged:
+      handleHardwareChange();
+      return;
+  }
+}
+
+/// Refreshes the live outputs for the engine's current input format and arms the input only
+/// while recording. It never changes the recorder state: a paused session stays paused.
+void IOSAudioRecorder::handleHardwareChange()
 {
   if (isIdle()) {
     return;
-  }
-
-  // The engine came back (an interruption's end, a rebuild) while the session is paused:
-  // pause it again so the microphone goes off until resume().
-  if (state_.load(std::memory_order_acquire) == RecorderState::Paused) {
-    [nativeRecorder_ pause];
   }
 
   BOOL formatChanged = NO;
@@ -264,7 +270,7 @@ IOSAudioRecorder::~IOSAudioRecorder()
     stop();
   }
 
-  nativeRecorder_.onInputConfigurationChange = nil;
+  nativeRecorder_.onInputNotification = nil;
 
   {
     std::scoped_lock lock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
@@ -573,11 +579,12 @@ void IOSAudioRecorder::resume()
     return;
   }
 
-  state_.store(RecorderState::Recording, std::memory_order_release);
-
   if (![nativeRecorder_ resume]) {
-    state_.store(RecorderState::Paused, std::memory_order_release);
+    return;
   }
+
+  state_.store(RecorderState::Recording, std::memory_order_release);
+  handleHardwareChange();
 }
 
 /// @brief Checks if the recorder is currently recording.

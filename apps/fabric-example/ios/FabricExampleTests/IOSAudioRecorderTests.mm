@@ -124,6 +124,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 @property(nonatomic, assign) NSInteger stopCallCount;
 @property(nonatomic, assign) NSInteger pauseCallCount;
 @property(nonatomic, assign) NSInteger resumeCallCount;
+@property(nonatomic, assign) BOOL resumeResult;
 @property(nonatomic, assign) NSInteger cleanupCallCount;
 @property(nonatomic, assign) NSInteger setInputArmedCallCount;
 @property(nonatomic, assign) BOOL lastInputArmed;
@@ -142,9 +143,19 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
         [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
     self.mockResolvedBufferSize = 512;
     self.startResult = YES;
+    self.resumeResult = YES;
   }
 
   return self;
+}
+
+- (BOOL)refreshResolvedInputFormatReturningChanged:(BOOL *)formatChanged
+{
+  if (formatChanged != nil) {
+    *formatChanged = NO;
+  }
+
+  return YES;
 }
 
 - (AVAudioFormat *)getResolvedInputFormat
@@ -194,7 +205,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
 - (BOOL)resume
 {
   self.resumeCallCount += 1;
-  return YES;
+  return self.resumeResult;
 }
 
 - (void)cleanup
@@ -283,7 +294,7 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
 
   _recorder = std::make_unique<TestableIOSAudioRecorder>(std::shared_ptr<AudioEventHandlerRegistry>());
   self.originalNativeRecorder = _recorder->replaceNativeRecorder(self.nativeRecorder);
-  self.nativeRecorder.onInputConfigurationChange = self.originalNativeRecorder.onInputConfigurationChange;
+  self.nativeRecorder.onInputNotification = self.originalNativeRecorder.onInputNotification;
 }
 
 - (void)tearDown
@@ -512,6 +523,47 @@ class TestableIOSAudioRecorder : public IOSAudioRecorder {
 
   XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
   XCTAssertFalse(_recorder->isPaused());
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
+}
+
+- (void)testResumeDoesNotStoreRecordingWhenNativeResumeFails
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->pause();
+  self.nativeRecorder.resumeResult = NO;
+
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertTrue(_recorder->isPaused());
+  XCTAssertFalse(_recorder->isRecording());
+}
+
+- (void)testHardwareChangeKeepsPausedRecorderPausedAndDisarmed
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->pause();
+  NSInteger pausesBefore = self.nativeRecorder.pauseCallCount;
+  NSInteger armsBefore = self.nativeRecorder.setInputArmedCallCount;
+
+  self.nativeRecorder.onInputNotification(AudioEngineInputNotificationHardwareChanged);
+
+  XCTAssertTrue(_recorder->isPaused());
+  XCTAssertEqual(self.nativeRecorder.pauseCallCount, pausesBefore);
+  XCTAssertEqual(self.nativeRecorder.setInputArmedCallCount, armsBefore);
+}
+
+- (void)testHardwareChangeArmsRecordingRecorder
+{
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateRunning;
+
+  self.nativeRecorder.onInputNotification(AudioEngineInputNotificationHardwareChanged);
+
+  XCTAssertTrue(_recorder->isRecording());
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
 }
 
 - (void)testStopReturnsErrorWhileIdle

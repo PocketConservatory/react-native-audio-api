@@ -281,6 +281,10 @@ if (status !== 'Granted') return;
 
 ### Interruption handling
 
+Enable emission with `AudioManager.observeAudioInterruptions(true)`, then listen.
+
+**Playback:** native pause on `began`, but does not resume any audio contexts. Resume on `ended` when it had been playing.
+
 ```tsx
 useEffect(() => {
   const sub = AudioManager.addSystemEventListener('interruption', (event) => {
@@ -289,6 +293,8 @@ useEffect(() => {
   return () => sub?.remove();
 }, []);
 ```
+
+**Recording (iOS):** native always attempts to resume the engine on `ended`, and again on the next foreground while a delivered `ended` left it `Interrupted`. It restores engine and session state only, never recorder state: a recorder paused with `Recorder.pause()` (also during the interruption) stays paused, its input is never restarted, and the app resumes it after `ended`. A recorder that was not paused resumes natively. Fork deviation from upstream: an `ended` the OS delivered always reaches JS with the OS's `shouldResume`, even when native recovery failed, so an app that resumes on `ended` keeps its signal; `began` is emitted only when a running engine was actually interrupted.
 
 ## Shared UI Components
 
