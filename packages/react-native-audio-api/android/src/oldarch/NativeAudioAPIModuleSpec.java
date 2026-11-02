@@ -69,6 +69,14 @@ public abstract class NativeAudioAPIModuleSpec extends ReactContextBaseJavaModul
 
   @ReactMethod
   @DoNotStrip
+  public abstract void observeRecordingInterruptions(boolean enabled);
+
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  @DoNotStrip
+  public abstract boolean isRecordingSilenced();
+
+  @ReactMethod
+  @DoNotStrip
   public abstract void observeVolumeChanges(boolean enabled);
 
   @ReactMethod
@@ -106,6 +114,10 @@ public abstract class NativeAudioAPIModuleSpec extends ReactContextBaseJavaModul
   @ReactMethod
   @DoNotStrip
   public abstract void isNotificationActive(String key, Promise promise);
+
+  @ReactMethod
+  @DoNotStrip
+  public abstract void isNotificationServiceRunning(String key, Promise promise);
 
   @ReactMethod
   @DoNotStrip

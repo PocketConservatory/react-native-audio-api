@@ -6,6 +6,7 @@
 #include <audioapi/utils/AudioBuffer.hpp>
 #include <audioapi/utils/Result.hpp>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -82,6 +83,13 @@ class AudioRecorder {
   virtual bool isRecording() const = 0;
   virtual bool isPaused() const = 0;
 
+  /// @brief Platform audio session id of the input stream this recorder is starting or holds
+  /// for an active session, or 0 when there is none (or the platform has no such id).
+  /// Lock-free; callable from any thread.
+  [[nodiscard]] virtual int32_t audioSessionId() const {
+    return 0;
+  }
+
   /// @brief Whether the recorder is idle (not recording or paused). Shared by
   /// both platforms.
   bool isIdle() const;
@@ -89,6 +97,19 @@ class AudioRecorder {
   RecorderState getState() const;
 
  protected:
+  /// @brief Moves a recording session to Paused. Shared by the platform pause() implementations.
+  /// A pause acts on the session state, not on the input stream's transient state: a stream that
+  /// is reconnecting or still starting does not drop it, and a stream reopened later keeps it.
+  /// The data path (acceptsInput()) is the only write gate, so a paused session writes nothing
+  /// whatever its stream does. Lock-free; callable from any thread.
+  /// @returns True when a recording session became paused; false when the recorder was idle or
+  /// already paused, in which case nothing changed.
+  bool markPaused();
+
+  /// @brief Whether captured input may be written to the outputs: true only while a session is
+  /// recording. Called by the platform data paths on the audio thread; lock-free.
+  [[nodiscard]] bool acceptsInput() const;
+
   bool wantsCallback() const;
   bool wantsFileOutput() const;
   bool wantsConnection() const;

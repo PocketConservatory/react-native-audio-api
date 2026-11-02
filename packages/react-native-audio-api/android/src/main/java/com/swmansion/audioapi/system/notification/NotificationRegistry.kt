@@ -187,6 +187,13 @@ class NotificationRegistry(
   fun isNotificationActive(key: String): Boolean = activeNotifications.getOrDefault(key, false)
 
   /**
+   * Whether the foreground service is running in the foreground for the notification with [key],
+   * whether or not the notification is visible (notification permission can be denied).
+   */
+  @Synchronized
+  fun isServiceRunning(key: String): Boolean = notifications[key]?.let { ForegroundServiceManager.isServingSubscriber(it) } ?: false
+
+  /**
    * Get all registered notification keys.
    */
   @Synchronized

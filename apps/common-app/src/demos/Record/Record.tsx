@@ -9,7 +9,7 @@ import {
   RecordingNotificationManager,
 } from 'react-native-audio-api';
 
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Platform, StyleSheet, View } from 'react-native';
 import { Container } from '../../components';
 
 import { Easing, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -36,6 +36,11 @@ const Record: FC = () => {
     null
   );
   const currentPositionSV = useSharedValue(0);
+  // Set while the recording is paused by an interruption rather than by the user,
+  // so only those pauses resume automatically.
+  const interruptedRef = useRef(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const playbackSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   const stopPlayback = useCallback(() => {
@@ -103,8 +108,6 @@ const Record: FC = () => {
     const result = await Recorder.start({
       fileNameOverride: `overridden_name_${Date.now()}`,
     });
-    const Recorder2 = new AudioRecorder();
-    Recorder2.start();
 
     setupNotification(false);
 
@@ -119,12 +122,14 @@ const Record: FC = () => {
   }, [state, hasPermissions]);
 
   const onPauseRecording = useCallback(() => {
+    interruptedRef.current = false;
     Recorder.pause();
     updateNotification(true);
     setState(RecordingState.Paused);
   }, []);
 
   const onResumeRecording = useCallback(() => {
+    interruptedRef.current = false;
     Recorder.resume();
     updateNotification(false);
     setState(RecordingState.Recording);
@@ -152,6 +157,7 @@ const Record: FC = () => {
   );
 
   const onStopRecording = useCallback(async () => {
+    interruptedRef.current = false;
     const info = await Recorder.stop();
     RecordingNotificationManager.hide();
     setState(RecordingState.Loading);
@@ -342,6 +348,46 @@ const Record: FC = () => {
       }
     };
   }, [stopPlayback]);
+
+  // Android observes the recording itself instead of taking audio focus, so other
+  // apps can keep playing while recording; iOS reports the audio session's interruptions.
+  useEffect(() => {
+    const observeInterruptions = (enabled: boolean) => {
+      if (Platform.OS === 'android') {
+        AudioManager.observeRecordingInterruptions(enabled);
+      } else {
+        AudioManager.observeAudioInterruptions(enabled);
+      }
+    };
+    observeInterruptions(true);
+
+    const subscription = AudioManager.addSystemEventListener(
+      'interruption',
+      (event) => {
+        if (event.type === 'began') {
+          if (stateRef.current === RecordingState.Recording) {
+            onPauseRecording();
+            interruptedRef.current = true;
+          }
+          return;
+        }
+
+        if (
+          !event.shouldResume ||
+          !interruptedRef.current ||
+          AudioManager.isRecordingSilenced()
+        ) {
+          return;
+        }
+        onResumeRecording();
+      }
+    );
+
+    return () => {
+      subscription?.remove();
+      observeInterruptions(false);
+    };
+  }, [onPauseRecording, onResumeRecording]);
 
   return (
     <Container disablePadding>

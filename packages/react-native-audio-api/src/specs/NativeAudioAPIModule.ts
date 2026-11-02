@@ -31,6 +31,8 @@ interface Spec extends TurboModule {
   // system events and interruptions
   observeAudioInterruptions(focusType: AudioFocusType, enabled: boolean): void;
   activelyReclaimSession(enabled: boolean): void;
+  observeRecordingInterruptions(enabled: boolean): void;
+  isRecordingSilenced(): boolean;
   observeVolumeChanges(enabled: boolean): void;
 
   // Permissions
@@ -51,6 +53,8 @@ interface Spec extends TurboModule {
   ): Promise<NotificationOpResponse>;
   hideNotification(key: string): Promise<NotificationOpResponse>;
   isNotificationActive(key: string): Promise<boolean>;
+  // Whether the foreground service runs in the foreground for the notification; false on iOS.
+  isNotificationServiceRunning(key: string): Promise<boolean>;
   // Android-only: reads bundled asset bytes and returns a Base64 string.
   readAndroidReleaseAssetBytesAsBase64(assetPath: string): Promise<string>;
 }

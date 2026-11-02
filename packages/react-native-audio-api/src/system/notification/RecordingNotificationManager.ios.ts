@@ -49,6 +49,20 @@ class RecordingNotificationManager implements NotificationManager<
   }
 
   /**
+   * Check if the recording's foreground service is running. True while the
+   * service is in the foreground for the recording notification, whether or not
+   * the notification is visible (notification permission can be denied on
+   * Android 13+). Always false on iOS and web.
+   *
+   * @returns Promise that resolves to whether the foreground service is
+   *   running.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async isServiceRunning(): Promise<boolean> {
+    return false;
+  }
+
+  /**
    * Add an event listener for notification actions.
    *
    * @param eventName - The event name to listen for.

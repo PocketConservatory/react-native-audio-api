@@ -79,6 +79,10 @@ IOSAudioRecorder::IOSAudioRecorder(
 
 void IOSAudioRecorder::runSideEffects(const AudioBufferList *inputBuffer, int numFrames)
 {
+  if (!acceptsInput()) {
+    return;
+  }
+
   if (usesFileOutput()) {
     if (auto lock = Locker::tryLock(fileWriterMutex_)) {
       fileWriter_->writeAudioData(inputBuffer, numFrames);
@@ -108,6 +112,12 @@ void IOSAudioRecorder::handleInputConfigurationChange()
 {
   if (isIdle()) {
     return;
+  }
+
+  // The engine came back (an interruption's end, a rebuild) while the session is paused:
+  // pause it again so the microphone goes off until resume().
+  if (state_.load(std::memory_order_acquire) == RecorderState::Paused) {
+    [nativeRecorder_ pause];
   }
 
   BOOL formatChanged = NO;
@@ -544,14 +554,17 @@ void IOSAudioRecorder::connect(const std::shared_ptr<RecorderAdapterNode> &node)
   }
 }
 
+/// @brief Pauses the recording session (see AudioRecorder::markPaused()). A session whose audio
+/// engine is interrupted or stopped is paused too, so an engine restart that does not go through
+/// resume() keeps it paused.
+/// This method should be called from the JS thread only.
 void IOSAudioRecorder::pause()
 {
-  if (!isRecording()) {
+  if (!markPaused()) {
     return;
   }
 
   [nativeRecorder_ pause];
-  state_.store(RecorderState::Paused, std::memory_order_release);
 }
 
 void IOSAudioRecorder::resume()

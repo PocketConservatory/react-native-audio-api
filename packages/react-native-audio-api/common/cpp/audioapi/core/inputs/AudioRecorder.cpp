@@ -87,6 +87,16 @@ bool AudioRecorder::isIdle() const {
   return state_.load(std::memory_order_acquire) == RecorderState::Idle;
 }
 
+bool AudioRecorder::markPaused() {
+  auto expected = RecorderState::Recording;
+  return state_.compare_exchange_strong(
+      expected, RecorderState::Paused, std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+bool AudioRecorder::acceptsInput() const {
+  return state_.load(std::memory_order_acquire) == RecorderState::Recording;
+}
+
 /// @brief Disables file output for the recorder. If active, the file is closed
 /// immediately. The writer is detached under the lock and closed outside it.
 /// This method should be called from the JS thread only.

@@ -2,7 +2,7 @@
 sidebar_position: 1
 ---
 
-import { Optional, ReadOnly, IOS, Experimental } from '@site/src/components/Badges';
+import { Optional, ReadOnly, IOS, Android, Experimental } from '@site/src/components/Badges';
 
 # AudioManager
 
@@ -110,6 +110,66 @@ Although this might change the expected behavior.
 
 Internally method uses `AVAudioSessionSilenceSecondaryAudioHintNotification` as well as
 interval polling to check if other audio is playing.
+
+### `observeRecordingInterruptions` <Android />
+
+| Parameter | Type | Description |
+| :---: | :---: | :---- |
+| `enabled` | `boolean` | It is used to enable/disable observing interruptions of an active recording. |
+
+Reports when the system silences the recorder's capture, without requesting audio focus.
+Use it instead of [`observeAudioInterruptions`](audio-manager#observeaudiointerruptions) for a recording that should keep going while other apps play audio:
+on Android, audio focus pauses other apps' playback and ends the recorder's focus as soon as another app starts playing,
+while capturing the microphone doesn't need focus at all.
+
+Events arrive through the existing [`interruption`](audio-manager#systemeventname) system event:
+
+- `began` with `shouldResume: false` when the capture is silenced (an incoming or ongoing call, the assistant, another app recording, the microphone privacy toggle), including a recording that starts already silenced.
+- `ended` with `shouldResume: true` once the capture is no longer silenced and no call that started after `began` is still going. A call or communication mode already set when the interruption began (for example the app's own VoIP call) doesn't hold `ended`. Each `began` is followed by at most one `ended`.
+
+Calls are counted, so each `observeRecordingInterruptions(true)` needs a matching `false` before observation stops.
+
+```tsx
+// Set only when the interruption paused the recording, so a pause the user made is never resumed.
+const pausedByInterruption = useRef(false);
+
+useEffect(() => {
+  AudioManager.observeRecordingInterruptions(true);
+  const subscription = AudioManager.addSystemEventListener('interruption', (event) => {
+    if (event.type === 'began') {
+      if (recorder.isRecording()) {
+        recorder.pause();
+        pausedByInterruption.current = true;
+      }
+    } else if (
+      event.shouldResume &&
+      pausedByInterruption.current &&
+      !AudioManager.isRecordingSilenced()
+    ) {
+      pausedByInterruption.current = false;
+      recorder.resume();
+    }
+  });
+
+  return () => {
+    subscription?.remove();
+    AudioManager.observeRecordingInterruptions(false);
+  };
+}, []);
+```
+
+:::info
+Requires Android 10 (API 29) or newer. On older Android versions, iOS and web it is a no-op; on iOS use `observeAudioInterruptions`, which reports microphone interruptions through the audio session.
+:::
+
+#### Returns `undefined`
+
+### `isRecordingSilenced` <Android />
+
+Whether the active recording is currently silenced by the system, or its interruption's `ended` is still held by a call that started after `began` (audio mode in call, in communication or call screening).
+It follows the same rule as the `interruption` events and is tracked only while [`observeRecordingInterruptions`](audio-manager#observerecordinginterruptions) is enabled; otherwise it is `false`.
+
+#### Returns `boolean`. Always `false` on Android versions older than 10 (API 29), iOS and web.
 
 ### `observeVolumeChanges`
 
