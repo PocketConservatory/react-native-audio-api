@@ -37,6 +37,7 @@
 - (void)createAudioEngineIfNeeded;
 - (void)destroyAudioEnginePreservingSessionDeactivationState:(BOOL)preserveSessionDeactivationState;
 - (BOOL)hasInput;
+- (BOOL)hasLiveInput;
 - (BOOL)hasSources;
 - (BOOL)hasTrackedGraph;
 - (AVAudioFormat *)currentInputConnectionFormat;
@@ -73,6 +74,14 @@ static AudioEngine *_sharedInstance = nil;
 - (BOOL)hasInput
 {
   return self.inputRegistration != nil;
+}
+
+/// An input marked paused stays registered but is not part of the live graph: the engine
+/// neither materializes it nor reads its format, so starting the engine for other consumers
+/// never turns the microphone on.
+- (BOOL)hasLiveInput
+{
+  return [self hasInput] && !self.inputRegistration.inputPaused;
 }
 
 - (BOOL)hasSources
@@ -181,7 +190,7 @@ static AudioEngine *_sharedInstance = nil;
 {
   std::scoped_lock lock(_engineLock);
 
-  if (self.audioEngine == nil) {
+  if (self.audioEngine == nil || self.inputRegistration.inputPaused) {
     return nil;
   }
 
@@ -213,7 +222,7 @@ static AudioEngine *_sharedInstance = nil;
 
 - (BOOL)materializeInputNodeIfNeeded
 {
-  if (self.inputRegistration == nil) {
+  if (![self hasLiveInput]) {
     return YES;
   }
 
@@ -349,7 +358,14 @@ static AudioEngine *_sharedInstance = nil;
 - (void)setInputPaused:(BOOL)inputPaused
 {
   std::scoped_lock lock(_engineLock);
+
+  if (self.inputRegistration == nil || self.inputRegistration.inputPaused == inputPaused) {
+    return;
+  }
+
   self.inputRegistration.inputPaused = inputPaused;
+  // The live graph gains or loses the input on the next start.
+  self.graphNeedsRebuild = true;
 }
 
 - (bool)onInterruptionBegin
@@ -404,23 +420,17 @@ static AudioEngine *_sharedInstance = nil;
 }
 
 // Interruption recovery restores engine and session state only, never recorder state: the
-// recorder alone moves between recording and paused, and the library never restarts a paused
-// input. According to
+// recorder alone moves between recording and paused. A paused input is not part of the live
+// graph (see hasLiveInput), so recovery treats it as no input and never restarts it; the
+// recorder refreshes its format on resume. According to
 // <https://developer.apple.com/documentation/avfaudio/avaudiosession/interruptionoptions/shouldresume>
-// `shouldResume` only refers to resuming playback, so an input that is not paused resumes
-// unconditionally. An engine that also plays sources resumes only when playback may, since it
-// cannot resume one without the other.
-static BOOL shouldEngineResumeAfterInterruption(
-    BOOL shouldPlaybackResume,
-    BOOL hasInput,
-    BOOL inputPaused,
-    BOOL hasSources)
+// `shouldResume` only refers to resuming playback, so a live input resumes unconditionally. An
+// engine that also plays sources resumes only when playback may, since it cannot resume one
+// without the other.
+static BOOL
+shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput, BOOL hasSources)
 {
-  if (hasInput) {
-    if (inputPaused) {
-      return NO;
-    }
-
+  if (hasLiveInput) {
     return !hasSources || shouldPlaybackResume;
   }
 
@@ -436,8 +446,8 @@ static BOOL shouldEngineResumeAfterInterruption(
     return AudioEngineInterruptionEndOutcomeNoOp;
   }
 
-  const BOOL resumeEngine = shouldEngineResumeAfterInterruption(
-      shouldResume, [self hasInput], self.inputRegistration.inputPaused, [self hasSources]);
+  const BOOL resumeEngine =
+      shouldEngineResumeAfterInterruption(shouldResume, [self hasLiveInput], [self hasSources]);
 
   if (!resumeEngine) {
     [self stopEngine];
@@ -455,7 +465,7 @@ static BOOL shouldEngineResumeAfterInterruption(
   [self stopEngine];
   [self rebuildAudioEngine];
 
-  if (self.inputRegistration != nil && self.inputNode == nil) {
+  if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(
         @"Error while materializing the audio input node after interruption: missing live input format");
     self.state = AudioEngineState::AudioEngineStateInterrupted;
@@ -486,7 +496,7 @@ static BOOL shouldEngineResumeAfterInterruption(
 
 - (void)notifyInput:(AudioEngineInputNotification)notification
 {
-  if (self.inputRegistration != nil && self.inputRegistration.onInputNotification != nil) {
+  if ([self hasLiveInput] && self.inputRegistration.onInputNotification != nil) {
     self.inputRegistration.onInputNotification(notification);
   }
 }
@@ -557,7 +567,7 @@ static BOOL shouldEngineResumeAfterInterruption(
     [self materializeTrackedNodesIfNeeded];
   }
 
-  if (self.inputRegistration != nil && self.inputNode == nil) {
+  if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(@"Error while materializing the audio input node: missing live input format");
     return false;
   }

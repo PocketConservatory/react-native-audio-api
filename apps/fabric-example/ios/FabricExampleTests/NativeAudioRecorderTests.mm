@@ -433,6 +433,8 @@ static void ClearFakeRecorderSharedAudioSession(void)
   XCTAssertTrue([recorder resume]);
 
   XCTAssertEqual(self.audioEngine.pauseIfNecessaryCallCount, 1);
+  // The restart rebuilds the graph with the input the pause left out.
+  XCTAssertEqual(self.audioEngine.stopIfNecessaryCallCount, 1);
   XCTAssertEqual(self.audioEngine.startIfNecessaryCallCount, 1);
   XCTAssertEqualObjects(self.audioEngine.inputPausedValues, (@[ @YES, @NO ]));
   // Re-arming is the owner's decision, taken in the HardwareChanged handler.

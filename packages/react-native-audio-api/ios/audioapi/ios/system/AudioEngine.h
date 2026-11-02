@@ -50,8 +50,10 @@ typedef NS_ENUM(NSInteger, AudioEngineInterruptionEndOutcome) {
                          (void (^)(AudioEngineInputNotification))onInputNotification;
 - (void)detachInputNode;
 - (AVAudioFormat *)getLiveInputFormat;
-/// Marks the attached input as paused by its recorder. The engine never restarts a paused
-/// input after an interruption; only the recorder's resume clears the mark.
+/// Marks the attached input as paused by its recorder. A paused input is left out of the live
+/// graph from the next start on (a player starting the engine does not turn the microphone on),
+/// gets no input notifications, and is never restarted by interruption recovery; only the
+/// recorder's resume clears the mark, and the next start brings the input back.
 - (void)setInputPaused:(BOOL)inputPaused;
 
 /// @return true if the engine transitioned from Running to Interrupted.
