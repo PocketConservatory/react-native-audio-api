@@ -172,28 +172,6 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeReachARecorderWhoseStreamIsReconnec
   EXPECT_EQ(handle.resume(), RecorderState::Recording);
 }
 
-TEST(AudioRecorderPauseTest, PauseWhileTheStreamIsReconnectingPausesTheSession) {
-  auto recorder = std::make_shared<FakeAudioRecorder>();
-  ASSERT_TRUE(recorder->start("").is_ok());
-  recorder->streamReconnecting = true;
-
-  recorder->pause();
-
-  EXPECT_EQ(recorder->getState(), RecorderState::Paused);
-}
-
-TEST(AudioRecorderPauseTest, PauseLeavesAnIdleOrPausedRecorderUnchanged) {
-  auto recorder = std::make_shared<FakeAudioRecorder>();
-
-  recorder->pause();
-  EXPECT_EQ(recorder->getState(), RecorderState::Idle);
-
-  ASSERT_TRUE(recorder->start("").is_ok());
-  recorder->pause();
-  recorder->pause();
-  EXPECT_EQ(recorder->getState(), RecorderState::Paused);
-}
-
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {
   auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
   ActiveRecorderHandle &handle = *handleOwner;

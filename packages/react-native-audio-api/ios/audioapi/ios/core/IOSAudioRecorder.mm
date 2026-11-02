@@ -114,6 +114,12 @@ void IOSAudioRecorder::handleInputConfigurationChange()
     return;
   }
 
+  // The engine came back (an interruption's end, a rebuild) while the session is paused:
+  // pause it again so the microphone goes off until resume().
+  if (state_.load(std::memory_order_acquire) == RecorderState::Paused) {
+    [nativeRecorder_ pause];
+  }
+
   BOOL formatChanged = NO;
   if (![nativeRecorder_ refreshResolvedInputFormatReturningChanged:&formatChanged]) {
     return;
