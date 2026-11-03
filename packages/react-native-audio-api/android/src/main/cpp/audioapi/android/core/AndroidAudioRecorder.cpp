@@ -94,10 +94,9 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
     closeStream();
   }
 
-  // Off MMAP (Shared, no performance mode), the system silences this capture when another
-  // client takes the microphone and reports it through AudioRecordingConfiguration, which
-  // RecordingSilenceListener matches by the allocated session id; an MMAP stream would be
-  // disconnected instead.
+  // RecordingSilenceListener learns that the system silenced this capture (another client took
+  // the microphone) from the AudioRecordingConfiguration it matches by session id, so the stream
+  // opens Shared with an allocated id.
   oboe::AudioStreamBuilder builder;
   builder.setSharingMode(oboe::SharingMode::Shared)
       ->setDirection(oboe::Direction::Input)
@@ -293,27 +292,15 @@ Result<FileInfo, std::string> AndroidAudioRecorder::stop() {
 /// Control lane, or any thread holding the ActiveRecorderHandle mutex.
 void AndroidAudioRecorder::pause() {
   std::scoped_lock streamLock(streamMutex_);
-  if (!markPaused()) {
-    return;
-  }
-
-  if (mStream_ != nullptr) {
-    mStream_->pause(0);
-  }
+  markPaused();
 }
 
-/// @brief Resumes a paused session. Without a stream (a restart is under way) only the state
-/// changes, and the reopened stream comes back recording.
+/// @brief Resumes a paused session; the stream never stopped, so only the state changes. Without
+/// a stream (a restart is under way) the reopened stream comes back recording.
 /// Control lane, or any thread holding the ActiveRecorderHandle mutex.
 void AndroidAudioRecorder::resume() {
   std::scoped_lock streamLock(streamMutex_);
-  if (!markResumed()) {
-    return;
-  }
-
-  if (mStream_ != nullptr) {
-    mStream_->start(0);
-  }
+  markResumed();
 }
 
 /// @brief onAudioReady callback that is invoked by the Oboe stream when new audio data is available.
