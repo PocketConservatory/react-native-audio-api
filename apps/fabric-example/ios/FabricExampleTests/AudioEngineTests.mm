@@ -1010,6 +1010,36 @@
 }
 
 - (void)
+    testPauseAndAttachSourceDuringInterruptionEndNotificationStartsFullGraph {
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  AVAudioSourceNodeRenderBlock renderBlock = [self testSourceRenderBlock];
+  [self attachTestInputWithNotification:^(
+            __unused AudioEngineInputNotification notification) {
+    [weakEngine pauseInput];
+    // A player attaching now finds no engine and creates one holding only
+    // its own source.
+    [weakEngine attachSourceNodeWithRenderBlock:renderBlock
+                                     sampleRate:44100
+                                   channelCount:2
+                         onOutputRecoveryFailed:nil];
+  }];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  FakeAudioEngine *playbackEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(playbackEngine,
+                 self.audioEngine.createdFakeEngines.lastObject);
+  XCTAssertTrue(playbackEngine.isRunning);
+  XCTAssertEqual(self.audioEngine.sourceNodes.count, 2UL);
+  XCTAssertEqual(playbackEngine.recordedAttachedNodes.count, 2UL);
+  XCTAssertEqual(playbackEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+}
+
+- (void)
     testPauseInputDuringInterruptionEndNotificationWithoutSourcesEndsPaused {
   [self attachInputPausedByHardwareChangedNotification];
   self.audioEngine.state = AudioEngineStateInterrupted;

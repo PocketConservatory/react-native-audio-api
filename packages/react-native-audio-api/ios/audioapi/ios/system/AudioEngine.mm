@@ -641,10 +641,13 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   AudioEngineInterruptionEndOutcome outcome;
   BOOL readyToStart = NO;
   dispatch_block_t notifyInput = nil;
+  // Strong: a dropped engine must not compare equal to a nil current one.
+  AVAudioEngine *rebuiltEngine = nil;
 
   {
     std::scoped_lock lock(_engineLock);
     outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
+    rebuiltEngine = self.audioEngine;
 
     if (outcome == AudioEngineInterruptionEndOutcomePaused || readyToStart) {
       notifyInput = [self inputNotificationBlock:AudioEngineInputNotificationHardwareChanged];
@@ -662,9 +665,12 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
   std::scoped_lock lock(_engineLock);
 
-  // A pauseInput while the lock was released dropped the rebuilt engine. The input is paused
-  // now, so deciding again needs no input notification and nothing can preempt it.
-  if (self.audioEngine == nil) {
+  // Only the engine rebuilt above may be started. A pauseInput while the lock was released
+  // dropped it (and an attach may have created a partial one in its place); the input is
+  // paused now, so deciding again needs no input notification and nothing can preempt it.
+  // An engine that left Interrupted meanwhile is settled by startAfterInterruption.
+  if (self.audioEngine != rebuiltEngine &&
+      self.state == AudioEngineState::AudioEngineStateInterrupted) {
     outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
 
     if (!readyToStart) {
@@ -720,8 +726,9 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   return AudioEngineInterruptionEndOutcomeStillInterrupted;
 }
 
-/// @brief Starts the engine rebuilt by rebuildAfterInterruption:, unless it was stopped or
-/// started meanwhile. Lock held.
+/// @brief Starts the current engine, unless it was stopped or started meanwhile. Lock held.
+/// @discussion The caller makes sure the current engine is the one rebuildAfterInterruption:
+/// just built, never one created or replaced while the lock was released.
 - (AudioEngineInterruptionEndOutcome)startAfterInterruption
 {
   if (self.state == AudioEngineState::AudioEngineStateRunning && [self.audioEngine isRunning]) {
