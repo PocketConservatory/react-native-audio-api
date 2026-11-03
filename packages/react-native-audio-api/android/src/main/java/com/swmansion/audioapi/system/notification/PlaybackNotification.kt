@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -219,6 +220,9 @@ class PlaybackNotification(
   override fun getNotificationId(): Int = notificationId
 
   override fun getChannelId(): String = channelId
+
+  override fun foregroundServiceType(): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0
 
   private fun updateSkipIntervalFromOptions(info: ReadableMap) {
     if (info.hasKey("skipInterval")) {

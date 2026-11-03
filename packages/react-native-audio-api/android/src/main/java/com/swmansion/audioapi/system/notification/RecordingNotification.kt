@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
@@ -314,4 +315,7 @@ class RecordingNotification(
   override fun getNotificationId(): Int = notificationId
 
   override fun getChannelId(): String = channelId
+
+  override fun foregroundServiceType(): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
 }

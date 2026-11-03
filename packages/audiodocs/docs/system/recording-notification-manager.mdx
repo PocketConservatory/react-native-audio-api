@@ -116,7 +116,7 @@ Checks if the notification is displayed.
 
 ### `isServiceRunning`
 
-Checks if the foreground service runs in the foreground for the recording notification. Unlike `isActive`, this does not depend on the notification being visible: with notification permission denied (Android 13+) the notification is hidden, but the service can still keep the recording alive in the background.
+Checks if the foreground service runs in the foreground for the recording notification. Unlike `isActive`, this does not depend on the notification being visible: with notification permission denied (Android 13+) the notification is hidden, but the service can still keep the recording alive in the background. On Android 11+ it also requires the service to run with the `microphone` foreground service type, which the system needs to keep capturing in the background, so it stays `false` when the app's manifest declares only `mediaPlayback`.
 
 #### Returns `Promise<boolean>`, which resolves with `false` on iOS and web.
 

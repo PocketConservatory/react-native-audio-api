@@ -36,4 +36,10 @@ interface BaseNotification {
    * Required for Android O+ notification channels.
    */
   fun getChannelId(): String
+
+  /**
+   * The foreground service type the service must hold for this notification's work to continue in
+   * the background, or 0 when the running API level has no such type.
+   */
+  fun foregroundServiceType(): Int
 }

@@ -25,8 +25,8 @@ object ForegroundServiceManager {
   private var startIntentSent = false
 
   /**
-   * The subscribers subscribed when the service last reached the foreground with a real
-   * notification, so the service types it declared cover them. Empty once it leaves the foreground.
+   * The subscribers whose [BaseNotification.foregroundServiceType] the service held when it last
+   * reached the foreground with a real notification. Empty once it leaves the foreground.
    */
   private var foregroundedSubscribers = emptySet<BaseNotification>()
 
@@ -76,16 +76,31 @@ object ForegroundServiceManager {
 
   /**
    * Whether the service is in the foreground for [subscriber]: a startForeground that ran while it
-   * was subscribed succeeded, and since then neither has the service left the foreground nor has
-   * the subscriber unsubscribed. Independent of whether its notification is visible.
+   * was subscribed succeeded with the service type it needs, and since then neither has the service
+   * left the foreground nor has the subscriber unsubscribed. Independent of whether its
+   * notification is visible.
    */
   @Synchronized
   fun isForegroundFor(subscriber: BaseNotification): Boolean = subscriber in foregroundedSubscribers && subscriber in subscribers
 
-  /** Called from [CentralizedForegroundService] after startForeground succeeded with a real notification. */
   @Synchronized
-  internal fun onServiceForegrounded() {
-    foregroundedSubscribers = subscribers.toSet()
+  internal fun currentSubscribers(): Set<BaseNotification> = subscribers.toSet()
+
+  /**
+   * Called from [CentralizedForegroundService] after startForeground succeeded with a real
+   * notification. [requestedFor] is the [currentSubscribers] snapshot the request was built from,
+   * and [heldServiceTypes] the types the service was started with.
+   */
+  @Synchronized
+  internal fun onServiceForegrounded(
+    requestedFor: Set<BaseNotification>,
+    heldServiceTypes: Int,
+  ) {
+    foregroundedSubscribers =
+      requestedFor.filterTo(mutableSetOf()) {
+        val required = it.foregroundServiceType()
+        (required and heldServiceTypes) == required
+      }
   }
 
   /** Called from [CentralizedForegroundService] whenever it leaves the foreground. */
