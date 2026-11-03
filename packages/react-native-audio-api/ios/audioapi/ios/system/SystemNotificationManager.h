@@ -21,6 +21,10 @@
 /// ended notification. Nil until it arrives, and again once the engine accepts the next begin,
 /// so a later secondary-audio end never replays an earlier interruption's hint; nil resumes.
 @property (nonatomic, strong) NSNumber *interruptionShouldResume;
+/// Main queue. Set once an OS-reported end whose recovery left the engine Interrupted has
+/// emitted `ended`, cleared when the engine accepts the next begin, so the interruption
+/// notification, the secondary-audio notification and the hint poll emit it once between them.
+@property (nonatomic, assign) bool stillInterruptedEndReported;
 @property (nonatomic, assign) bool volumeChangesObserved;
 @property (nonatomic, assign) bool wasOtherAudioPlaying;
 

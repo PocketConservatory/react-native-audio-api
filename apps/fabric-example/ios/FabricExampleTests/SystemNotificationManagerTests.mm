@@ -849,6 +849,40 @@ static void ClearFakeSharedAudioSession(void)
   XCTAssertEqualObjects(self.module.lastEventBody[@"type"], @"ended");
 }
 
+- (void)testStillInterruptedEndsFromSeveralSourcesEmitEndedOnce
+{
+  [self.manager observeAudioInterruptions:YES];
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeBegan
+                                                                   option:0]];
+  [self flushMainQueue];
+  [self.module resetCapturedEvent];
+  self.fakeAudioEngine.interruptionEndOutcome = AudioEngineInterruptionEndOutcomeStillInterrupted;
+
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeEnded
+                                                                   option:AVAudioSessionInterruptionOptionShouldResume]];
+  [self.manager handleSecondaryAudio:[self secondaryAudioNotificationWithType:
+                                               AVAudioSessionSilenceSecondaryAudioHintTypeEnd]];
+  self.fakeSharedAudioSession.secondaryAudioShouldBeSilencedHint = NO;
+  self.manager.wasOtherAudioPlaying = YES;
+  [self.manager checkSecondaryAudioHint];
+  [self flushMainQueue];
+
+  XCTAssertEqual(self.fakeAudioEngine.interruptionEndCallCount, 3);
+  XCTAssertEqual(self.module.eventInvocationCount, 1);
+  XCTAssertEqualObjects(self.module.lastEventBody[@"type"], @"ended");
+
+  [self.module resetCapturedEvent];
+  self.fakeAudioEngine.state = AudioEngineStateRunning;
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeBegan
+                                                                   option:0]];
+  [self.manager handleInterruption:[self interruptionNotificationWithType:AVAudioSessionInterruptionTypeEnded
+                                                                   option:AVAudioSessionInterruptionOptionShouldResume]];
+  [self flushMainQueue];
+
+  XCTAssertEqual(self.module.eventInvocationCount, 2);
+  XCTAssertEqualObjects(self.module.lastEventBody[@"type"], @"ended");
+}
+
 - (void)testForegroundRetryThatFailsAgainDoesNotEmit
 {
   [self.manager observeAudioInterruptions:YES];

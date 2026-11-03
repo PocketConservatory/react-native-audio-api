@@ -165,15 +165,16 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
     [sessionManager markInactive];
     if (transitioned) {
       self.interruptionShouldResume = nil;
+      self.stillInterruptedEndReported = false;
       [self emitInterruptionBegan];
     }
   });
 }
 
-/// Native recovery always runs. An end that changed the engine state reaches JS, and so does an
-/// end the OS delivered whose recovery left the engine Interrupted, so an app that resumes on
-/// `ended` keeps its signal; a foreground retry that fails again stays silent. An end that found
-/// nothing interrupted (NoOp) never reaches JS.
+/// Native recovery always runs. An end that changed the engine state reaches JS, and so does the
+/// first end the OS reported in an interruption whose recovery left the engine Interrupted, so an
+/// app that resumes on `ended` keeps its signal; later such ends and a foreground retry that fails
+/// again stay silent. An end that found nothing interrupted (NoOp) never reaches JS.
 - (void)handleInterruptionEnd:(bool)shouldResume deliveredByOS:(bool)deliveredByOS
 {
   AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
@@ -181,9 +182,14 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   dispatch_async(dispatch_get_main_queue(), ^{
     self.interruptionEndedDelivered = true;
     AudioEngineInterruptionEndOutcome outcome = [audioEngine onInterruptionEnd:shouldResume];
+    bool reportsStillInterrupted = deliveredByOS &&
+        outcome == AudioEngineInterruptionEndOutcomeStillInterrupted &&
+        !self.stillInterruptedEndReported;
+    if (reportsStillInterrupted) {
+      self.stillInterruptedEndReported = true;
+    }
     if (outcome == AudioEngineInterruptionEndOutcomeRunning ||
-        outcome == AudioEngineInterruptionEndOutcomePaused ||
-        (deliveredByOS && outcome == AudioEngineInterruptionEndOutcomeStillInterrupted)) {
+        outcome == AudioEngineInterruptionEndOutcomePaused || reportsStillInterrupted) {
       [self emitInterruptionEnded:shouldResume];
     }
   });
