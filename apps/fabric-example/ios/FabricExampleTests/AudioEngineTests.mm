@@ -1039,6 +1039,30 @@
   XCTAssertNil(self.audioEngine.inputNode);
 }
 
+- (void)testStartDuringInterruptionEndNotificationReportsRunning {
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  // A player starting the engine now rebuilds and starts it before the
+  // interruption end re-takes the lock.
+  [self attachTestInputWithNotification:^(
+            __unused AudioEngineInputNotification notification) {
+    [weakEngine startIfNecessary];
+  }];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  FakeAudioEngine *runningEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(runningEngine, self.audioEngine.createdFakeEngines.lastObject);
+  XCTAssertTrue(runningEngine.isRunning);
+  XCTAssertEqual(runningEngine.startCallCount, 1);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  // The source and the input sink.
+  XCTAssertEqual(runningEngine.recordedAttachedNodes.count, 2UL);
+  XCTAssertNotNil(self.audioEngine.inputNode);
+}
+
 - (void)
     testPauseInputDuringInterruptionEndNotificationWithoutSourcesEndsPaused {
   [self attachInputPausedByHardwareChangedNotification];

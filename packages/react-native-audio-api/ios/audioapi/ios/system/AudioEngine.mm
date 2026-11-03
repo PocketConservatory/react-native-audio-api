@@ -665,10 +665,11 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
   std::scoped_lock lock(_engineLock);
 
-  // Only the engine rebuilt above may be started. A pauseInput while the lock was released
-  // dropped it (and an attach may have created a partial one in its place); the input is
-  // paused now, so deciding again needs no input notification and nothing can preempt it.
-  // An engine that left Interrupted meanwhile is settled by startAfterInterruption.
+  // Only the engine rebuilt above may be started. If it was dropped or replaced while the lock
+  // was released (a pauseInput, an attach that created a partial engine, a restartAudioEngine,
+  // a failed start) and the state is still Interrupted, decide again under this lock. An engine
+  // that left Interrupted meanwhile (a start that succeeded) is settled by
+  // startAfterInterruption.
   if (self.audioEngine != rebuiltEngine &&
       self.state == AudioEngineState::AudioEngineStateInterrupted) {
     outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
