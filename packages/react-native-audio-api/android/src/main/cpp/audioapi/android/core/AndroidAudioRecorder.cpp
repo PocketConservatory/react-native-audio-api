@@ -94,12 +94,17 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
     closeStream();
   }
 
+  // Off MMAP (Shared, no performance mode), the system silences this capture when another
+  // client takes the microphone and reports it through AudioRecordingConfiguration, which
+  // RecordingSilenceListener matches by the allocated session id; an MMAP stream would be
+  // disconnected instead.
   oboe::AudioStreamBuilder builder;
-  builder.setSharingMode(oboe::SharingMode::Exclusive)
+  builder.setSharingMode(oboe::SharingMode::Shared)
       ->setDirection(oboe::Direction::Input)
       ->setFormat(oboe::AudioFormat::Float)
       ->setFormatConversionAllowed(true)
       ->setPerformanceMode(oboe::PerformanceMode::None)
+      ->setSessionId(oboe::SessionId::Allocate)
       ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
       ->setDataCallback(shared_from_this())
       ->setErrorCallback(shared_from_this());
@@ -182,6 +187,7 @@ Result<NoneType, std::string> AndroidAudioRecorder::start() {
   }
 
   if (!result.is_ok()) {
+    sessionId_.store(0, std::memory_order_release);
     releaseInputRoute();
     return result;
   }
@@ -218,6 +224,12 @@ Result<NoneType, std::string> AndroidAudioRecorder::startCapture(
   if (!outputsResult.is_ok()) {
     return outputsResult;
   }
+
+  // Published before the stream starts, so a recording configuration that appears already
+  // silenced can be matched. A restart replaces the previous stream's id only here, so observers
+  // never see the session end in between.
+  sessionId_.store(
+      std::max(static_cast<int32_t>(mStream_->getSessionId()), 0), std::memory_order_release);
 
   // Started in both states, so a paused session comes back from a restart as it was; see pause().
   auto result = mStream_->requestStart();
@@ -258,6 +270,7 @@ Result<FileInfo, std::string> AndroidAudioRecorder::stop() {
     }
 
     state_.store(RecorderState::Idle, std::memory_order_release);
+    sessionId_.store(0, std::memory_order_release);
     releaseInputRoute();
     lastCallbackFrameCount_.store(0, std::memory_order_release);
 
@@ -363,9 +376,14 @@ bool AndroidAudioRecorder::isIdle() const {
   return state_.load(std::memory_order_acquire) == RecorderState::Idle;
 }
 
+int32_t AndroidAudioRecorder::audioSessionId() const {
+  return sessionId_.load(std::memory_order_acquire);
+}
+
 void AndroidAudioRecorder::cleanup() {
   std::scoped_lock streamLock(streamMutex_);
   state_.store(RecorderState::Idle, std::memory_order_release);
+  sessionId_.store(0, std::memory_order_release);
   releaseInputRoute();
   closeStream();
 }

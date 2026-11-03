@@ -2,6 +2,7 @@
 
 #include <audioapi/core/inputs/AudioRecorder.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -27,9 +28,14 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
     return Result<NoneType, std::string>::Err("Another recording is already in progress");
   }
 
+  // The candidate is the session source before start() so the id it publishes while starting
+  // is already readable; the slot itself is assigned only once start() succeeds.
+  setSessionSource(recorder);
   auto result = recorder->start();
   if (result.is_ok()) {
     recorder_ = recorder;
+  } else {
+    setSessionSource(recorder_);
   }
   return result;
 }
@@ -37,6 +43,21 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
 void ActiveRecorderHandle::clearRecorder() {
   std::scoped_lock lock(mutex_);
   recorder_.reset();
+  setSessionSource({});
+}
+
+void ActiveRecorderHandle::setSessionSource(const std::weak_ptr<AudioRecorder> &recorder) {
+  std::scoped_lock lock(sessionSourceMutex_);
+  sessionSource_ = recorder;
+}
+
+int32_t ActiveRecorderHandle::audioSessionId() const {
+  std::shared_ptr<AudioRecorder> recorder;
+  {
+    std::scoped_lock lock(sessionSourceMutex_);
+    recorder = sessionSource_.lock();
+  }
+  return recorder ? recorder->audioSessionId() : 0;
 }
 
 RecorderState ActiveRecorderHandle::currentState() const {

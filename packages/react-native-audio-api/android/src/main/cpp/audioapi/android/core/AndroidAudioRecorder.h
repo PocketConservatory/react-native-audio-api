@@ -7,6 +7,7 @@
 #include <audioapi/utils/Macros.h>
 #include <audioapi/utils/Result.hpp>
 #include <oboe/Oboe.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -45,6 +46,11 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   bool isIdle() const override;
 
   [[nodiscard]] double getInputLatency() const override;
+
+  /// @brief Matches `AudioRecordingConfiguration.getClientAudioSessionId()` of this recorder's
+  /// input stream: set just before the stream starts and cleared when the session ends; a
+  /// restart keeps the old id until the reopened stream's replaces it.
+  [[nodiscard]] int32_t audioSessionId() const override;
 
   oboe::DataCallbackResult
   onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
@@ -103,6 +109,8 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   AudioBuffer planarInput_;
 
   std::shared_ptr<oboe::AudioStream> mStream_;
+  /// Written under streamMutex_, read lock-free through audioSessionId().
+  std::atomic<int32_t> sessionId_{0};
 };
 
 } // namespace audioapi

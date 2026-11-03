@@ -25,6 +25,13 @@ object NativeRecorderControl {
   /** Non-blocking read of the recorder state; [RecorderState.IDLE] when there is none. */
   fun currentState(): RecorderState = RecorderState.fromOrdinal(currentRecorderState())
 
+  /**
+   * Audio session id of the active recorder's input stream, matching
+   * `AudioRecordingConfiguration.getClientAudioSessionId()`; 0 when no session holds a stream.
+   * Never waits on a start or stop in progress.
+   */
+  fun audioSessionId(): Int = activeAudioSessionId()
+
   @JvmStatic
   private external fun stopActiveRecording(): Int
 
@@ -36,4 +43,7 @@ object NativeRecorderControl {
 
   @JvmStatic
   private external fun currentRecorderState(): Int
+
+  @JvmStatic
+  private external fun activeAudioSessionId(): Int
 }

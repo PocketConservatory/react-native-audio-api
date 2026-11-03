@@ -75,6 +75,13 @@ class AudioRecorder {
 
   [[nodiscard]] virtual double getInputLatency() const = 0;
 
+  /// @brief Platform audio session id of the input stream this recorder is starting or holds for
+  /// an active session, or 0 when there is none or the platform has no such id. Lock-free;
+  /// callable from any thread.
+  [[nodiscard]] virtual int32_t audioSessionId() const {
+    return 0;
+  }
+
  protected:
   /// @brief Lifecycle of one recorder output: the file writer, the JS callback, or the adapter
   /// node. Written on the JS thread under that output's mutex; the audio thread reads it

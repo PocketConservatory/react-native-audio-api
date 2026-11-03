@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <test/src/MockAudioEventHandlerRegistry.h>
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -39,12 +41,31 @@ class FakeAudioRecorder : public AudioRecorder {
   std::vector<std::string> stopPaths{"file:///tmp/recording.m4a"};
   std::atomic<int> stopCount{0};
 
+  // Mirrors AndroidAudioRecorder: the id is published before the stream starts and
+  // cleared when the start fails or the session stops.
+  int32_t streamSessionId = 0;
+  bool failStart = false;
+  std::function<void()> onStreamStarting;
+  std::atomic<int32_t> sessionId{0};
+
   Result<NoneType, std::string> start() override {
     if (state_ != RecorderState::Idle) {
       return Err(std::string("Recorder is already recording"));
     }
+    sessionId = streamSessionId;
+    if (onStreamStarting) {
+      onStreamStarting();
+    }
+    if (failStart) {
+      sessionId = 0;
+      return Err(std::string("Failed to start stream"));
+    }
     state_ = RecorderState::Recording;
     return Ok(None);
+  }
+
+  [[nodiscard]] int32_t audioSessionId() const override {
+    return sessionId;
   }
 
   // Mirrors AndroidAudioRecorder::stop(): under its locks exactly one caller
@@ -53,6 +74,7 @@ class FakeAudioRecorder : public AudioRecorder {
     if (state_.exchange(RecorderState::Idle) == RecorderState::Idle) {
       return Err(std::string("Recorder is not in recording state."));
     }
+    sessionId = 0;
     stopCount += 1;
     return Ok(FileInfo{.paths = stopPaths, .size = 1.5, .duration = 10.0});
   }
@@ -411,6 +433,77 @@ TEST(ActiveRecorderHandleTest, TryStartSucceedsWhenPreviousRecorderExpired) {
   }
 
   ASSERT_TRUE(handle.tryStart(successor).is_ok());
+}
+
+TEST(ActiveRecorderHandleTest, SessionIdIsReadableWhileTryStartIsStarting) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  recorder->streamSessionId = 42;
+  int32_t idSeenWhileStarting = 0;
+  // The slot is assigned only after start() returns; an observer reacting to the stream
+  // starting must already find its id.
+  recorder->onStreamStarting = [&] {
+    idSeenWhileStarting = handle.audioSessionId();
+  };
+
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  EXPECT_EQ(idSeenWhileStarting, 42);
+  EXPECT_EQ(handle.audioSessionId(), 42);
+
+  ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
+  EXPECT_EQ(handle.audioSessionId(), 0);
+}
+
+TEST(ActiveRecorderHandleTest, SessionIdReadDoesNotWaitOnTheHandleMutex) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  recorder->streamSessionId = 7;
+  int32_t idSeenFromAnotherThread = 0;
+  // tryStart() holds the handle mutex across start(); a reader on another thread (the
+  // Android main looper) must not block on it.
+  recorder->onStreamStarting = [&] {
+    std::thread reader([&] { idSeenFromAnotherThread = handle.audioSessionId(); });
+    reader.join();
+  };
+
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  EXPECT_EQ(idSeenFromAnotherThread, 7);
+}
+
+TEST(ActiveRecorderHandleTest, FailedTryStartRestoresThePreviousSessionSource) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto current = std::make_shared<FakeAudioRecorder>();
+  current->streamSessionId = 5;
+  ASSERT_TRUE(handle.tryStart(current).is_ok());
+  current->stop();
+
+  auto failing = std::make_shared<FakeAudioRecorder>();
+  failing->streamSessionId = 9;
+  failing->failStart = true;
+  ASSERT_TRUE(handle.tryStart(failing).is_err());
+  // A failed candidate that still reports an id must not stay the source.
+  failing->sessionId = 9;
+  EXPECT_EQ(handle.audioSessionId(), 0);
+
+  current->streamSessionId = 6;
+  ASSERT_TRUE(handle.tryStart(current).is_ok());
+  EXPECT_EQ(handle.audioSessionId(), 6);
+}
+
+TEST(ActiveRecorderHandleTest, ExpiredRecorderReportsNoSessionId) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  {
+    auto expired = std::make_shared<FakeAudioRecorder>();
+    expired->streamSessionId = 3;
+    ASSERT_TRUE(handle.tryStart(expired).is_ok());
+    EXPECT_EQ(handle.audioSessionId(), 3);
+  }
+
+  EXPECT_EQ(handle.audioSessionId(), 0);
 }
 
 // Thread startup skew usually serializes a single two-thread run, so the race
