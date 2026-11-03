@@ -215,6 +215,8 @@ public:
           &audioEventHandlerRegistry)
       : IOSAudioRecorder(audioEventHandlerRegistry) {}
 
+  using AudioRecorder::acceptsInput;
+
   NativeAudioRecorder *
   replaceNativeRecorder(NativeAudioRecorder *nativeRecorder) {
     NativeAudioRecorder *previous = nativeRecorder_;
@@ -501,6 +503,42 @@ public:
 
   XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
   XCTAssertFalse(_recorder->isPaused());
+}
+
+- (void)testPauseWhileEngineInterruptedResumesOnRequest {
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  _recorder->pause();
+
+  XCTAssertEqual(self.nativeRecorder.pauseCallCount, 1);
+  XCTAssertEqual(_recorder->getState(), RecorderState::Paused);
+  XCTAssertFalse(_recorder->acceptsInput());
+
+  self.nativeRecorder.resumeResult = NO;
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertFalse(_recorder->acceptsInput());
+
+  self.nativeRecorder.resumeResult = YES;
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 2);
+  XCTAssertEqual(_recorder->getState(), RecorderState::Recording);
+  XCTAssertTrue(_recorder->acceptsInput());
+}
+
+- (void)testResumeRestartsInterruptedEngineOfRecordingSession {
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateInterrupted;
+  XCTAssertTrue(_recorder->isPaused());
+
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertTrue(_recorder->acceptsInput());
 }
 
 - (void)testResumeDoesNotStoreRecordingWhenNativeResumeFails {

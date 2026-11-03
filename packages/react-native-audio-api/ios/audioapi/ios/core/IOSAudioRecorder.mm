@@ -360,6 +360,9 @@ Result<NoneType, std::string> IOSAudioRecorder::rerouteInput()
   return Result<NoneType, std::string>::Ok(None);
 }
 
+/// Resumes a paused session, including one paused while the audio engine was interrupted, and
+/// restarts an engine an interruption left down. The session becomes Recording only once the
+/// native resume succeeds; one that only lost its engine is Recording already.
 void IOSAudioRecorder::resume()
 {
   if (!isPaused()) {
@@ -370,7 +373,7 @@ void IOSAudioRecorder::resume()
     return;
   }
 
-  state_.store(RecorderState::Recording, std::memory_order_release);
+  markResumed();
   handleHardwareChange();
 }
 

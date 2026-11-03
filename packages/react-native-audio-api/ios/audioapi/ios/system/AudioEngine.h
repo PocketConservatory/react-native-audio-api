@@ -54,7 +54,27 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
                      onInputNotification:
                          (void (^)(AudioEngineInputNotification))onInputNotification;
 - (void)detachInputNode;
+/// The live input's current format; nil without a usable one or while the input is paused.
 - (AVAudioFormat *)getLiveInputFormat;
+/// @brief Marks the attached input paused by its recorder and turns the microphone off, leaving
+/// every other consumer as it was.
+/// @discussion A running engine that plays sources is rebuilt without the input and keeps
+/// running (if that restart fails it settles Paused and its sources hear
+/// `onOutputRecoveryFailed`); one whose only consumer is the input is paused; an engine that is
+/// not running keeps its state, so an Interrupted one is still recovered when the interruption
+/// ends. From then on the input is left out of every graph the engine
+/// builds, so a player starting the engine does not turn the microphone on, interruption
+/// recovery treats it as no input, and it gets no input notifications. Only `resumeInput` or
+/// detaching the input clears the mark.
+- (void)pauseInput;
+/// @brief Clears the input's paused mark and starts the engine with the input live.
+/// @discussion A running engine whose graph left the paused input out is stopped and rebuilt
+/// with it. On failure the paused mark is restored and the engine settles as a failed
+/// `startIfNecessary` does (an Interrupted engine stays Interrupted); sources a stopped engine
+/// was playing hear `onOutputRecoveryFailed`. Does not notify the input: its recorder refreshes
+/// its format and re-arms itself after a successful resume.
+/// @return Whether the engine is running with the input live.
+- (bool)resumeInput;
 
 /// @return true if the engine transitioned from Running to Interrupted.
 - (bool)onInterruptionBegin;
@@ -75,7 +95,6 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 - (bool)isCurrentEngine:(AVAudioEngine *)engine;
 
 - (bool)startIfNecessary;
-- (void)pauseIfNecessary;
 - (void)stopIfNecessary;
 
 - (void)stopIfPossible;
