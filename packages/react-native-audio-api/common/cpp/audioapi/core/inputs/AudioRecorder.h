@@ -78,9 +78,10 @@ class AudioRecorder {
   /// @brief Platform audio session id of the input stream this recorder is starting or holds for
   /// an active session, or 0 when there is none or the platform has no such id. Lock-free;
   /// callable from any thread.
-  [[nodiscard]] virtual int32_t audioSessionId() const {
-    return 0;
-  }
+  [[nodiscard]] int32_t audioSessionId() const;
+
+  /// @brief The cell audioSessionId() reads, for a reader that must not own the recorder.
+  [[nodiscard]] std::weak_ptr<const std::atomic<int32_t>> audioSessionIdSource() const;
 
  protected:
   /// @brief Lifecycle of one recorder output: the file writer, the JS callback, or the adapter
@@ -145,6 +146,9 @@ class AudioRecorder {
   /// The caller must hold callbackMutex_, fileWriterMutex_ and adapterNodeMutex_.
   Result<NoneType, std::string> reprepareOutputs(const StreamFormat &format);
 
+  /// Publishes the id audioSessionId() reports; 0 clears it.
+  void publishAudioSessionId(int32_t sessionId);
+
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
 
@@ -193,6 +197,10 @@ class AudioRecorder {
   std::atomic<float> streamSampleRate_{0.0F};
 
  private:
+  /// Shared so ActiveRecorderHandle can read the id without owning the recorder.
+  const std::shared_ptr<std::atomic<int32_t>> audioSessionId_ =
+      std::make_shared<std::atomic<int32_t>>(0);
+
   /// The caller must hold callbackMutex_. A callback already prepared is flushed and torn
   /// down first.
   Result<NoneType, std::string> prepareCallback(const StreamFormat &format);

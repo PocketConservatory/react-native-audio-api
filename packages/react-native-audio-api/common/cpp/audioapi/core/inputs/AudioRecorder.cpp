@@ -444,6 +444,18 @@ RecorderState AudioRecorder::getState() const {
   return isPaused() ? RecorderState::Paused : RecorderState::Recording;
 }
 
+int32_t AudioRecorder::audioSessionId() const {
+  return audioSessionId_->load(std::memory_order_acquire);
+}
+
+std::weak_ptr<const std::atomic<int32_t>> AudioRecorder::audioSessionIdSource() const {
+  return audioSessionId_;
+}
+
+void AudioRecorder::publishAudioSessionId(int32_t sessionId) {
+  audioSessionId_->store(sessionId, std::memory_order_release);
+}
+
 bool AudioRecorder::usesCallback() const {
   return callbackOutputState_.load(std::memory_order_acquire) == OutputState::Active;
 }

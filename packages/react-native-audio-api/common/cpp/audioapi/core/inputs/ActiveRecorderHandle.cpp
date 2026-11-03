@@ -2,6 +2,7 @@
 
 #include <audioapi/core/inputs/AudioRecorder.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -35,7 +36,7 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
   if (result.is_ok()) {
     recorder_ = recorder;
   } else {
-    setSessionSource(recorder_);
+    setSessionSource(prevRecorder);
   }
   return result;
 }
@@ -43,21 +44,23 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
 void ActiveRecorderHandle::clearRecorder() {
   std::scoped_lock lock(mutex_);
   recorder_.reset();
-  setSessionSource({});
+  setSessionSource(nullptr);
 }
 
-void ActiveRecorderHandle::setSessionSource(const std::weak_ptr<AudioRecorder> &recorder) {
+void ActiveRecorderHandle::setSessionSource(const std::shared_ptr<AudioRecorder> &recorder) {
+  auto source =
+      recorder ? recorder->audioSessionIdSource() : std::weak_ptr<const std::atomic<int32_t>>{};
   std::scoped_lock lock(sessionSourceMutex_);
-  sessionSource_ = recorder;
+  sessionSource_ = std::move(source);
 }
 
 int32_t ActiveRecorderHandle::audioSessionId() const {
-  std::shared_ptr<AudioRecorder> recorder;
+  std::shared_ptr<const std::atomic<int32_t>> sessionId;
   {
     std::scoped_lock lock(sessionSourceMutex_);
-    recorder = sessionSource_.lock();
+    sessionId = sessionSource_.lock();
   }
-  return recorder ? recorder->audioSessionId() : 0;
+  return sessionId ? sessionId->load(std::memory_order_acquire) : 0;
 }
 
 RecorderState ActiveRecorderHandle::currentState() const {

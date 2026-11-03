@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 using namespace audioapi;
@@ -46,26 +47,30 @@ class FakeAudioRecorder : public AudioRecorder {
   int32_t streamSessionId = 0;
   bool failStart = false;
   std::function<void()> onStreamStarting;
-  std::atomic<int32_t> sessionId{0};
+  std::thread::id *destroyedOn = nullptr;
+
+  ~FakeAudioRecorder() override {
+    if (destroyedOn != nullptr) {
+      *destroyedOn = std::this_thread::get_id();
+    }
+  }
+
+  using AudioRecorder::publishAudioSessionId;
 
   Result<NoneType, std::string> start() override {
     if (state_ != RecorderState::Idle) {
       return Err(std::string("Recorder is already recording"));
     }
-    sessionId = streamSessionId;
+    publishAudioSessionId(streamSessionId);
     if (onStreamStarting) {
       onStreamStarting();
     }
     if (failStart) {
-      sessionId = 0;
+      publishAudioSessionId(0);
       return Err(std::string("Failed to start stream"));
     }
     state_ = RecorderState::Recording;
     return Ok(None);
-  }
-
-  [[nodiscard]] int32_t audioSessionId() const override {
-    return sessionId;
   }
 
   // Mirrors AndroidAudioRecorder::stop(): under its locks exactly one caller
@@ -74,7 +79,7 @@ class FakeAudioRecorder : public AudioRecorder {
     if (state_.exchange(RecorderState::Idle) == RecorderState::Idle) {
       return Err(std::string("Recorder is not in recording state."));
     }
-    sessionId = 0;
+    publishAudioSessionId(0);
     stopCount += 1;
     return Ok(FileInfo{.paths = stopPaths, .size = 1.5, .duration = 10.0});
   }
@@ -485,7 +490,7 @@ TEST(ActiveRecorderHandleTest, FailedTryStartRestoresThePreviousSessionSource) {
   failing->failStart = true;
   ASSERT_TRUE(handle.tryStart(failing).is_err());
   // A failed candidate that still reports an id must not stay the source.
-  failing->sessionId = 9;
+  failing->publishAudioSessionId(9);
   EXPECT_EQ(handle.audioSessionId(), 0);
 
   current->streamSessionId = 6;
@@ -586,6 +591,39 @@ TEST(ActiveRecorderHandleTest, ConcurrentTryStartAdmitsOnlyOneRecorder) {
     trySecond.join();
 
     EXPECT_EQ(successes.load(), 1) << "iteration " << iteration;
+  }
+}
+
+TEST(ActiveRecorderHandleTest, SessionIdReadNeverRunsTheRecorderDestructor) {
+  // The Android main thread polls the id; if a read owned the recorder while JS dropped its
+  // last reference, the recorder's stop and stream close would run on that thread.
+  for (int iteration = 0; iteration < RACE_TEST_ITERATIONS; ++iteration) {
+    auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+    ActiveRecorderHandle &handle = *handleOwner;
+    std::thread::id destroyedOn;
+    auto recorder = std::make_shared<FakeAudioRecorder>();
+    recorder->streamSessionId = 4;
+    recorder->destroyedOn = &destroyedOn;
+    ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+
+    std::atomic<bool> reading{true};
+    std::atomic<bool> readerStarted{false};
+    std::thread reader([&] {
+      while (reading.load()) {
+        std::ignore = handle.audioSessionId();
+        readerStarted.store(true);
+      }
+    });
+    while (!readerStarted.load()) {
+      std::this_thread::yield();
+    }
+
+    recorder.reset();
+    reading.store(false);
+    reader.join();
+
+    EXPECT_EQ(destroyedOn, std::this_thread::get_id());
+    EXPECT_EQ(handle.audioSessionId(), 0);
   }
 }
 
