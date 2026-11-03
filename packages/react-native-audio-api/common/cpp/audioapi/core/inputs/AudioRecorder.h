@@ -98,9 +98,23 @@ class AudioRecorder {
   };
 
   /// Audio thread. @p channels holds one pointer per stream channel, each to numFrames float32
-  /// samples, valid only for the call. Every consumer tryLocks its mutex and drops the buffer
-  /// rather than block.
+  /// samples, valid only for the call. Drops the buffer unless acceptsInput(). Every consumer
+  /// tryLocks its mutex and drops the buffer rather than block.
   void onAudioFrames(const float *const *channels, int numFrames);
+
+  /// @brief Moves a recording session to Paused, whatever the input stream is doing: a pause
+  /// made while the stream is down or restarting holds once input returns, because
+  /// onAudioFrames() writes only while acceptsInput(). Lock-free.
+  /// @returns Whether the session became paused; false for an idle or already paused recorder.
+  bool markPaused();
+
+  /// @brief Moves a paused session back to Recording; the counterpart of markPaused().
+  /// Lock-free.
+  /// @returns Whether the session resumed; false for an idle or recording recorder.
+  bool markResumed();
+
+  /// Whether captured input may reach the outputs: true only while a session is recording.
+  [[nodiscard]] bool acceptsInput() const;
 
   /// JS thread. Fails while the input is unavailable, which on iOS happens between a route
   /// change and the engine settling on the replacement format.

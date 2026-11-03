@@ -344,14 +344,15 @@ Result<FileInfo, std::string> IOSAudioRecorder::stop()
   return finalizeSideEffects(std::move(sideEffects));
 }
 
+/// Pauses the session even while the audio engine is interrupted or stopped, so input that comes
+/// back without going through resume() stays paused.
 void IOSAudioRecorder::pause()
 {
-  if (!isRecording()) {
+  if (!markPaused()) {
     return;
   }
 
   [nativeRecorder_ pause];
-  state_.store(RecorderState::Paused, std::memory_order_release);
 }
 
 Result<NoneType, std::string> IOSAudioRecorder::rerouteInput()

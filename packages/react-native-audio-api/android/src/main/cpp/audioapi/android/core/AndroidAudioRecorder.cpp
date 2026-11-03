@@ -178,18 +178,20 @@ Result<NoneType, std::string> AndroidAudioRecorder::start() {
   Result<NoneType, std::string> result =
       Err("The selected Bluetooth microphone could not be connected.");
   if (routedDeviceId.has_value()) {
-    result = startCapture(std::nullopt, RecorderState::Recording);
+    result = startCapture(std::nullopt);
   }
 
   if (!result.is_ok()) {
     releaseInputRoute();
+    return result;
   }
+
+  state_.store(RecorderState::Recording, std::memory_order_release);
   return result;
 }
 
 Result<NoneType, std::string> AndroidAudioRecorder::startCapture(
-    const std::optional<StreamFormat> &preparedFormat,
-    RecorderState targetState) {
+    const std::optional<StreamFormat> &preparedFormat) {
   auto streamResult = openAudioStream();
 
   if (!streamResult.is_ok()) {
@@ -224,7 +226,6 @@ Result<NoneType, std::string> AndroidAudioRecorder::startCapture(
     return Err("Failed to start stream: " + std::string(oboe::convertToText(result)));
   }
 
-  state_.store(targetState, std::memory_order_release);
   return Ok(None);
 }
 
@@ -272,32 +273,34 @@ Result<FileInfo, std::string> AndroidAudioRecorder::stop() {
   return finalizeSideEffects(std::move(sideEffects));
 }
 
-/// @brief Pauses the audio recording stream.
-/// For session without active file output, this method acts same as stop().
+/// @brief Pauses the recording session, including one whose stream a restart has taken down:
+/// the restart leaves the state alone, so the reopened stream comes back paused.
 /// Oboe can't pause an input stream (AAudio and OpenSL ES both return Unimplemented), so the
-/// stream keeps running while Paused and onAudioReady drops its buffers.
+/// stream keeps running while Paused and onAudioFrames() drops its buffers.
 /// Control lane, or any thread holding the ActiveRecorderHandle mutex.
 void AndroidAudioRecorder::pause() {
   std::scoped_lock streamLock(streamMutex_);
-  if (!isStreamRecording()) {
+  if (!markPaused()) {
     return;
   }
 
-  mStream_->pause(0);
-  state_.store(RecorderState::Paused, std::memory_order_release);
+  if (mStream_ != nullptr) {
+    mStream_->pause(0);
+  }
 }
 
-/// @brief Resumes the audio recording stream if it was previously paused.
+/// @brief Resumes a paused session. Without a stream (a restart is under way) only the state
+/// changes, and the reopened stream comes back recording.
 /// Control lane, or any thread holding the ActiveRecorderHandle mutex.
 void AndroidAudioRecorder::resume() {
   std::scoped_lock streamLock(streamMutex_);
-  // No stream while a restart is under way; the restart brings the session back paused.
-  if (!isPaused() || mStream_ == nullptr) {
+  if (!markResumed()) {
     return;
   }
 
-  mStream_->start(0);
-  state_.store(RecorderState::Recording, std::memory_order_release);
+  if (mStream_ != nullptr) {
+    mStream_->start(0);
+  }
 }
 
 /// @brief onAudioReady callback that is invoked by the Oboe stream when new audio data is available.
@@ -313,10 +316,6 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
     oboe::AudioStream *oboeStream,
     void *audioData,
     int32_t numFrames) {
-  if (isPaused()) {
-    return oboe::DataCallbackResult::Continue;
-  }
-
   const auto frames = static_cast<size_t>(numFrames);
   if (audioData == nullptr || numFrames <= 0 || frames > planarInput_.getSize()) {
     return oboe::DataCallbackResult::Continue;
@@ -385,7 +384,6 @@ Result<NoneType, std::string> AndroidAudioRecorder::rerouteInput() {
 
 Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
   std::optional<StreamFormat> previousFormat;
-  RecorderState stateToRestore = RecorderState::Idle;
 
   {
     std::scoped_lock streamLock(streamMutex_);
@@ -399,7 +397,6 @@ Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
     if (formatResult.is_ok()) {
       previousFormat = formatResult.unwrap();
     }
-    stateToRestore = state_.load(std::memory_order_acquire);
     closeStream();
     releaseInputRoute();
   }
@@ -425,7 +422,7 @@ Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
     }
 
     adoptInputRoute(routedDeviceId);
-    result = startCapture(previousFormat, stateToRestore);
+    result = startCapture(previousFormat);
   }
 
   if (!result.is_ok()) {

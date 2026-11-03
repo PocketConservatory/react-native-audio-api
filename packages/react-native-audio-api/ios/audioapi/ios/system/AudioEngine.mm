@@ -812,7 +812,8 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
 - (void)pauseIfNecessary
 {
   std::scoped_lock lock(_engineLock);
-  if (self.state == AudioEngineState::AudioEngineStatePaused) {
+  // An interrupted engine must stay Interrupted so the interruption's end still restarts it.
+  if (self.state != AudioEngineState::AudioEngineStateRunning) {
     return;
   }
 

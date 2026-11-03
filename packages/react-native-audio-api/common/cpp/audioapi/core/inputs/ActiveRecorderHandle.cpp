@@ -52,7 +52,7 @@ bool ActiveRecorderHandle::isRecordingOngoing() const {
 RecorderState ActiveRecorderHandle::pause() {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();
-  if (recorder && recorder->isRecording()) {
+  if (recorder) {
     recorder->pause();
   }
   return stateOf(recorder);
@@ -69,7 +69,7 @@ RecorderState ActiveRecorderHandle::pause(const std::shared_ptr<AudioRecorder> &
 RecorderState ActiveRecorderHandle::resume() {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();
-  if (recorder && recorder->isPaused()) {
+  if (recorder) {
     recorder->resume();
   }
   return stateOf(recorder);

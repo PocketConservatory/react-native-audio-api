@@ -64,16 +64,14 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   void closeStream();
   /// The caller holds streamMutex_.
   [[nodiscard]] bool isStreamRecording() const;
-  /// @brief Opens the stream on the adopted route, starts it, and enters @p targetState
-  /// (Recording or Paused; a paused session's started stream drops its buffers).
+  /// @brief Opens the stream on the adopted route and starts it, leaving the recorder's state
+  /// alone (a paused session's started stream drops its buffers).
   /// @p preparedFormat is nullopt for a new session, whose outputs are prepared from scratch;
   /// for a live one it is the format its outputs were prepared for, and they follow the
   /// stream only when its format differs.
   ///
   /// The caller holds callbackMutex_, fileWriterMutex_, adapterNodeMutex_ and streamMutex_.
-  Result<NoneType, std::string> startCapture(
-      const std::optional<StreamFormat> &preparedFormat,
-      RecorderState targetState);
+  Result<NoneType, std::string> startCapture(const std::optional<StreamFormat> &preparedFormat);
   /// @brief Closes the capture stream, opens a new one on the currently selected input and
   /// carries the recording or paused session over to it.
   ///

@@ -15,7 +15,7 @@
 namespace audioapi {
 
 void AudioRecorder::onAudioFrames(const float *const *channels, int numFrames) {
-  if (channels == nullptr || numFrames <= 0) {
+  if (!acceptsInput() || channels == nullptr || numFrames <= 0) {
     return;
   }
 
@@ -418,6 +418,22 @@ void AudioRecorder::reportError(const std::string &message) {
 
   audioEventHandlerRegistry_->dispatchEvent(
       AudioEvent::RECORDER_ERROR, callbackId, StringPayload{.name = "message", .reason = message});
+}
+
+bool AudioRecorder::markPaused() {
+  auto expected = RecorderState::Recording;
+  return state_.compare_exchange_strong(
+      expected, RecorderState::Paused, std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+bool AudioRecorder::markResumed() {
+  auto expected = RecorderState::Paused;
+  return state_.compare_exchange_strong(
+      expected, RecorderState::Recording, std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+bool AudioRecorder::acceptsInput() const {
+  return state_.load(std::memory_order_acquire) == RecorderState::Recording;
 }
 
 RecorderState AudioRecorder::getState() const {
