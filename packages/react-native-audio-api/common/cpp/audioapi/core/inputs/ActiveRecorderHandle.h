@@ -34,9 +34,9 @@ class ActiveRecorderHandle {
   /// @brief The state of the recorder in the slot, or Idle when the slot is empty.
   [[nodiscard]] RecorderState currentState() const;
 
-  /// @brief AudioRecorder::audioSessionId() of the occupant, or of the recorder tryStart() is
-  /// starting, so an observer can match the stream before start() returns; 0 when there is
-  /// neither. Never waits on a start or stop in progress and never owns the recorder, so its
+  /// @brief The id in the AudioRecorder::audioSessionIdSource() cell of the occupant, or of the
+  /// recorder tryStart() is starting, so an observer can match the stream before start()
+  /// returns; 0 when there is neither. Never waits on a start or stop in progress and never owns the recorder, so its
   /// last reference cannot be dropped here; safe on a UI thread.
   [[nodiscard]] int32_t audioSessionId() const;
 

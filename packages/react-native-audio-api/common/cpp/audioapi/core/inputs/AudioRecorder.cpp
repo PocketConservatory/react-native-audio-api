@@ -444,10 +444,6 @@ RecorderState AudioRecorder::getState() const {
   return isPaused() ? RecorderState::Paused : RecorderState::Recording;
 }
 
-int32_t AudioRecorder::audioSessionId() const {
-  return audioSessionId_->load(std::memory_order_acquire);
-}
-
 std::weak_ptr<const std::atomic<int32_t>> AudioRecorder::audioSessionIdSource() const {
   return audioSessionId_;
 }
