@@ -28,6 +28,10 @@ class RecordingNotificationManager implements NotificationManager<
     return this.isShown_;
   }
 
+  async isServiceRunning(): Promise<boolean> {
+    return false;
+  }
+
   isRegistered(): boolean {
     return this.isRegistered_;
   }

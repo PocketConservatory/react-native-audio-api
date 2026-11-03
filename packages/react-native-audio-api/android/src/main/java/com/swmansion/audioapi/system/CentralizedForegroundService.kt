@@ -55,6 +55,7 @@ class CentralizedForegroundService : Service() {
       ACTION_STOP -> {
         if (stopSelfResult(startId)) {
           explicitStop = true
+          ForegroundServiceManager.onServiceLeftForeground()
           stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
           Log.d(TAG, "Stop superseded by a newer start request, service stays in the foreground")
@@ -87,6 +88,7 @@ class CentralizedForegroundService : Service() {
 
       val (notificationId, notification) = existingNotification
       startForegroundCompat(notificationId, notification)
+      ForegroundServiceManager.onServiceForegrounded()
 
       Log.d(TAG, "Centralized foreground service started with notification ID: $notificationId")
     } catch (e: Exception) {
@@ -118,6 +120,7 @@ class CentralizedForegroundService : Service() {
       // exit is unconditional, because there is nothing to keep in the foreground; a start
       // racing it is picked up again by ForegroundServiceManager.onServiceDestroyed.
       explicitStop = true
+      ForegroundServiceManager.onServiceLeftForeground()
       stopForeground(STOP_FOREGROUND_REMOVE)
       stopSelf()
     }

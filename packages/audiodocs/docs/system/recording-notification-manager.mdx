@@ -114,6 +114,12 @@ Checks if the notification is displayed.
 
 #### Returns `Promise<boolean>`.
 
+### `isServiceRunning`
+
+Checks if the foreground service runs in the foreground for the recording notification. Unlike `isActive`, this does not depend on the notification being visible: with notification permission denied (Android 13+) the notification is hidden, but the service can still keep the recording alive in the background.
+
+#### Returns `Promise<boolean>`, which resolves with `false` on iOS and web.
+
 ### `addEventListener`
 
 Adds an event listener for notification actions.

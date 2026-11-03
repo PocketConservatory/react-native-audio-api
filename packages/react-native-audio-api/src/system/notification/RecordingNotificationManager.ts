@@ -78,6 +78,25 @@ class RecordingNotificationManager implements NotificationManager<
   }
 
   /**
+   * Check whether the recording's foreground service is running in the
+   * foreground for the recording notification, whether or not the notification
+   * is visible (notification permission can be denied on Android 13+). Android
+   * only; always `false` on iOS and web.
+   *
+   * @returns Promise that resolves to whether the foreground service is
+   *   running.
+   */
+  async isServiceRunning(): Promise<boolean> {
+    if (!NativeAudioAPIModule) {
+      return false;
+    }
+
+    return await NativeAudioAPIModule.isNotificationServiceRunning(
+      this.notificationKey
+    );
+  }
+
+  /**
    * Add an event listener for notification actions.
    *
    * @param eventName - The event name to listen for.
