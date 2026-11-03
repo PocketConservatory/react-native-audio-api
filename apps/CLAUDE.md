@@ -296,7 +296,7 @@ useEffect(() => {
 }, []);
 ```
 
-**Recording:** native always resumes the engine and a recording that is not paused. Do not `Recorder.pause()` on `began`: iOS has already stopped I/O (the engine is `Interrupted`), and a recorder paused then stays paused after `ended` until the app calls `resume()` — recovery restarts only the playback sharing the engine. JS only freezes UI that still looks live (the Record demo's scrolling waveform). Unfreeze only on `ended` (failed resume does not emit `ended`).
+**Recording:** native always resumes the engine and a recording that is not paused. Do not `Recorder.pause()` on `began`: iOS has already stopped I/O (the engine is `Interrupted`), and a recorder paused then stays paused after `ended` until the app calls `resume()` — recovery restarts only the playback sharing the engine. JS only freezes UI that still looks live (the Record demo's scrolling waveform). Unfreeze only on `ended`. An `ended` the OS delivers is emitted even when native recovery leaves the engine `Interrupted`; the foreground retry emits again only if it changes the engine state.
 
 ## Shared UI Components
 
