@@ -60,18 +60,20 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 /// every other consumer as it was.
 /// @discussion A running engine that plays sources is rebuilt without the input and keeps
 /// running (if that restart fails it settles Paused and its sources hear
-/// `onOutputRecoveryFailed`); one whose only consumer is the input is paused; an engine that is
-/// not running keeps its state, so an Interrupted one is still recovered when the interruption
-/// ends. From then on the input is left out of every graph the engine
+/// `onOutputRecoveryFailed`). Any other engine was built with the input live, so it is stopped
+/// and dropped: one whose only consumer is the input settles Paused, and one that is not running
+/// keeps its state, so an Interrupted one is still recovered when the interruption ends. The
+/// next start builds a new engine. From then on the input is left out of every graph the engine
 /// builds, so a player starting the engine does not turn the microphone on, interruption
 /// recovery treats it as no input, and it gets no input notifications. Only `resumeInput` or
 /// detaching the input clears the mark.
 - (void)pauseInput;
 /// @brief Clears the input's paused mark and starts the engine with the input live.
 /// @discussion A running engine whose graph left the paused input out is stopped and rebuilt
-/// with it. On failure the paused mark is restored and the engine settles as a failed
-/// `startIfNecessary` does (an Interrupted engine stays Interrupted); sources a stopped engine
-/// was playing hear `onOutputRecoveryFailed`. Does not notify the input: its recorder refreshes
+/// with it. On failure the paused mark is restored, the engine built with the input is dropped
+/// as `pauseInput` drops it, and the state settles as a failed `startIfNecessary` does (an
+/// Interrupted engine stays Interrupted); sources a stopped engine was playing hear
+/// `onOutputRecoveryFailed`. Does not notify the input: its recorder refreshes
 /// its format and re-arms itself after a successful resume.
 /// @return Whether the engine is running with the input live.
 - (bool)resumeInput;

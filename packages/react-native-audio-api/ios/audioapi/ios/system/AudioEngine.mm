@@ -62,6 +62,7 @@
 - (void)settleStateAfterFailedStart;
 - (void)resumeAfterRebuild;
 - (bool)startIfNecessaryLocked;
+- (void)markInputPausedLocked;
 - (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
                                                  readyToStart:(BOOL *)readyToStart;
@@ -97,6 +98,8 @@ static AudioEngine *_sharedInstance = nil;
 /// part of the live graph: the engine neither materializes it, nor reads its format, nor
 /// engages voice processing for it, nor notifies it. Reading `AVAudioEngine.inputNode` alone
 /// turns the microphone on, so starting the engine for other consumers must not touch it.
+/// Every transition to paused goes through `markInputPausedLocked`, so no engine that read
+/// `inputNode` while the input was live outlives the pause.
 - (BOOL)hasLiveInput
 {
   return [self hasInput] && !self.inputRegistration.inputPaused;
@@ -472,24 +475,36 @@ static AudioEngine *_sharedInstance = nil;
     return;
   }
 
-  registration.inputPaused = YES;
-  self.graphNeedsRebuild = true;
+  [self markInputPausedLocked];
 
   if (self.state != AudioEngineState::AudioEngineStateRunning) {
     return;
   }
 
   if (![self hasSources]) {
-    if (self.audioEngine != nil) {
-      [self.audioEngine pause];
-    }
-
     self.state = AudioEngineState::AudioEngineStatePaused;
     return;
   }
 
   [self rebuildGraphForCurrentHardware];
   [self resumeAfterRebuild];
+}
+
+/// @brief Marks the input paused and drops the engine built while it was live. Lock held.
+/// @discussion That engine read `inputNode` and may have engaged voice processing for it, and
+/// a paused input must not leave either behind (see `hasLiveInput`). A running engine that
+/// plays sources is kept for the caller to rebuild without the input; any other engine is
+/// destroyed, which marks the tracked graph for rebuild, so the next start builds it without
+/// the input. The engine state is left to the caller.
+- (void)markInputPausedLocked
+{
+  self.inputRegistration.inputPaused = YES;
+
+  if (self.state == AudioEngineState::AudioEngineStateRunning && [self hasSources]) {
+    return;
+  }
+
+  [self destroyAudioEnginePreservingSessionDeactivationState:YES];
 }
 
 - (bool)resumeInput
@@ -519,11 +534,8 @@ static AudioEngine *_sharedInstance = nil;
     return true;
   }
 
-  registration.inputPaused = wasPaused;
-
   if (wasPaused) {
-    // The failed start may have built a graph holding the input; the next start must not reuse it.
-    self.graphNeedsRebuild = true;
+    [self markInputPausedLocked];
   }
 
   if (stoppedPlayback) {
