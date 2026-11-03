@@ -957,7 +957,7 @@
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
   XCTAssertNil(self.audioEngine.audioEngine);
   XCTAssertNil(self.audioEngine.inputNode);
-  XCTAssertEqual(fakeEngine.pauseCallCount, 0);
+  XCTAssertEqual(fakeEngine.resetCallCount, 1);
   XCTAssertNil([self.audioEngine getLiveInputFormat]);
 
   // The interruption end rebuilds for the source, without the paused input.
@@ -975,11 +975,53 @@
 
   [self.audioEngine pauseInput];
 
-  XCTAssertEqual(fakeEngine.pauseCallCount, 0);
+  XCTAssertEqual(fakeEngine.resetCallCount, 1);
   XCTAssertEqual(self.audioEngine.state, AudioEngineStateInterrupted);
   XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
                  AudioEngineInterruptionEndOutcomePaused);
   XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.startCallCount, 0);
+}
+
+- (void)attachInputPausedByHardwareChangedNotification {
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  [self attachTestInputWithNotification:^(
+            AudioEngineInputNotification notification) {
+    if (notification == AudioEngineInputNotificationHardwareChanged) {
+      [weakEngine pauseInput];
+    }
+  }];
+}
+
+- (void)
+    testPauseInputDuringInterruptionEndNotificationResumesSourceWithoutInput {
+  [self attachInputPausedByHardwareChangedNotification];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  FakeAudioEngine *playbackEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertNotNil(playbackEngine);
+  XCTAssertTrue(playbackEngine.isRunning);
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStateRunning);
+  XCTAssertEqual(playbackEngine.inputNodeAccessCount, 0);
+  XCTAssertNil(self.audioEngine.inputNode);
+}
+
+- (void)
+    testPauseInputDuringInterruptionEndNotificationWithoutSourcesEndsPaused {
+  [self attachInputPausedByHardwareChangedNotification];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomePaused);
+
+  XCTAssertEqual(self.audioEngine.state, AudioEngineStatePaused);
+  XCTAssertNotNil(self.audioEngine.audioEngine);
+  XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.startCallCount, 0);
+  XCTAssertEqual(self.audioEngine.currentFakeAudioEngine.inputNodeAccessCount,
+                 0);
 }
 
 - (void)testPausedVoiceProcessingInputLeavesSystemInputUntouched {

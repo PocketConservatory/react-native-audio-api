@@ -661,6 +661,17 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 
   std::scoped_lock lock(_engineLock);
+
+  // A pauseInput while the lock was released dropped the rebuilt engine. The input is paused
+  // now, so deciding again needs no input notification and nothing can preempt it.
+  if (self.audioEngine == nil) {
+    outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
+
+    if (!readyToStart) {
+      return outcome;
+    }
+  }
+
   return [self startAfterInterruption];
 }
 
