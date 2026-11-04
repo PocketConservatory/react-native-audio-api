@@ -72,7 +72,6 @@
 - (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock
                 notifyingInput:(BOOL)notifyInput;
 - (void)markInputPausedLocked;
-- (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification;
 - (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
                                                  readyToStart:(BOOL *)readyToStart;
@@ -740,20 +739,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   return AudioEngineInterruptionEndOutcomeRunning;
 }
 
-/// @brief The registered input's handler bound to @p notification, or nil without one.
-/// @discussion Run it only after releasing `_engineLock`: the handler calls back into the engine.
-// TODO: replace the returned blocks with explicit post-lock effects in the engine refactor.
-- (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification
-{
-  void (^handler)(AudioEngineInputNotification) = self.inputRegistration.onInputNotification;
-
-  if (handler == nil || ![self hasLiveInput]) {
-    return nil;
-  }
-
-  return ^{ handler(notification); };
-}
-
 /// @brief Lets the live input catch up with the graph `rebuildAudioEngine` built for it. Lock
 /// held on entry and exit.
 /// @discussion While `_inputAwaitsHardwareChange` is set, runs the input's `HardwareChanged`
@@ -775,12 +760,12 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 
   AVAudioEngine *notifiedEngine = self.audioEngine;
-  dispatch_block_t notifyInput =
-      [self inputNotificationBlock:AudioEngineInputNotificationHardwareChanged];
+  void (^onInputNotification)(AudioEngineInputNotification) =
+      self.inputRegistration.onInputNotification;
 
-  if (notifyInput != nil) {
+  if (onInputNotification != nil && [self hasLiveInput]) {
     lock.unlock();
-    notifyInput();
+    onInputNotification(AudioEngineInputNotificationHardwareChanged);
     lock.lock();
   }
 
