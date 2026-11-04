@@ -140,7 +140,7 @@
     "wpt:compare": "node ./wpt_tests/wpt/wpt-compare.mjs",
     "wpt:markdown": "node ./wpt_tests/wpt/wpt-markdown.mjs --from-json ./wpt_tests/results/latest.json",
     "create:package": "./scripts/create-package.sh",
-    "prepack": "cp ../../README.md ./README.md",
+    "prepack": "yarn build && cp ../../README.md ./README.md",
     "postpack": "rm ./README.md"
   },
   "keywords": [
