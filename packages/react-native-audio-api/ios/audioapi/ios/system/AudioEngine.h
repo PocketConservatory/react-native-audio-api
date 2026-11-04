@@ -49,6 +49,12 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
                            (nullable OnOutputRecoveryFailedBlock)onOutputRecoveryFailed;
 - (void)detachSourceNodeWithId:(NSString *)sourceNodeId;
 
+/// @brief Registers the input and connects it to the engine.
+/// @param onInputNotification Hears `HardwareChanged` for every graph the engine rebuilds with
+/// the live input, before that graph starts and with no engine lock held, so it may call back
+/// into the engine. It can be called for the same graph from two threads at once, and the
+/// graph may start as soon as either call returns: every call must leave the input's
+/// consumers matching the live input format by the time it returns.
 - (void)attachInputNodeWithReceiverBlock:(AVAudioSinkNodeReceiverBlock)receiverBlock
                   voiceProcessingEnabled:(BOOL)voiceProcessingEnabled
                      onInputNotification:
@@ -73,8 +79,8 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 /// with it. On failure the paused mark is restored, the engine built with the input is dropped
 /// as `pauseInput` drops it, and the state settles as a failed `startIfNecessary` does (an
 /// Interrupted engine stays Interrupted); sources a stopped engine was playing hear
-/// `onOutputRecoveryFailed`. Does not notify the input: its recorder refreshes
-/// its format and re-arms itself after a successful resume.
+/// `onOutputRecoveryFailed`. A graph rebuilt with the input is started only after the input
+/// heard `HardwareChanged`, outside the lock, as in `startIfNecessary`.
 /// @return Whether the engine is running with the input live.
 - (bool)resumeInput;
 
@@ -96,6 +102,9 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 /// True only for the AVAudioEngine this object drives now: not nil, foreign or replaced ones.
 - (bool)isCurrentEngine:(AVAudioEngine *)engine;
 
+/// @brief Starts the engine for the tracked graph, rebuilding it first when it may no longer
+/// match the hardware. A graph rebuilt with a live input is started only after the input heard
+/// `HardwareChanged` for it, outside the lock.
 - (bool)startIfNecessary;
 - (void)stopIfNecessary;
 

@@ -36,6 +36,11 @@
   /// Tracks whether voice processing is currently engaged on the system input
   /// node of the live engine instance. Reset whenever the engine is recreated.
   BOOL _voiceProcessingApplied;
+  /// Set when `rebuildAudioEngine` builds a graph with a live input; cleared once that input
+  /// heard `HardwareChanged` for this exact engine (`notifyInputOfRebuiltGraph:`) or when the
+  /// engine is destroyed. No graph is started while it is set, so the input's consumers match
+  /// the new format before the first render.
+  BOOL _inputAwaitsHardwareChange;
 }
 
 @property (nonatomic, strong)
@@ -58,12 +63,14 @@
 - (AVAudioFormat *)liveInputFormat;
 - (void)resetInputNode;
 - (BOOL)mustRebuildBeforeStart;
+- (BOOL)graphIsStale;
 - (void)rebuildGraphForCurrentHardware;
 - (void)settleStateAfterFailedStart;
+- (BOOL)startBuiltEngineLocked;
 - (void)resumeAfterRebuild;
-- (bool)startIfNecessaryLocked;
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock;
 - (void)markInputPausedLocked;
-- (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification;
+- (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
                                                  readyToStart:(BOOL *)readyToStart;
 - (AudioEngineInterruptionEndOutcome)startAfterInterruption;
@@ -133,6 +140,7 @@ static AudioEngine *_sharedInstance = nil;
   self.inputNode = nil;
   self.graphNeedsRebuild = hadGraph;
   _voiceProcessingApplied = NO;
+  _inputAwaitsHardwareChange = NO;
 
   if (!preserveSessionDeactivationState) {
     self.sessionDeactivationInvalidatedGraph = false;
@@ -509,7 +517,7 @@ static AudioEngine *_sharedInstance = nil;
 
 - (bool)resumeInput
 {
-  std::scoped_lock lock(_engineLock);
+  std::unique_lock lock(_engineLock);
   AudioEngineInputRegistration *registration = self.inputRegistration;
 
   if (registration == nil) {
@@ -530,7 +538,7 @@ static AudioEngine *_sharedInstance = nil;
     }
   }
 
-  if ([self startIfNecessaryLocked]) {
+  if ([self startIfNecessaryLocked:lock]) {
     return true;
   }
 
@@ -638,48 +646,30 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
 - (AudioEngineInterruptionEndOutcome)onInterruptionEnd:(bool)shouldResume
 {
-  AudioEngineInterruptionEndOutcome outcome;
-  BOOL readyToStart = NO;
-  dispatch_block_t notifyInput = nil;
-  // Strong: a dropped engine must not compare equal to a nil current one.
-  AVAudioEngine *rebuiltEngine = nil;
+  std::unique_lock lock(_engineLock);
 
-  {
-    std::scoped_lock lock(_engineLock);
-    outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
-    rebuiltEngine = self.audioEngine;
+  while (true) {
+    BOOL readyToStart = NO;
+    const AudioEngineInterruptionEndOutcome outcome = [self rebuildAfterInterruption:shouldResume
+                                                                        readyToStart:&readyToStart];
 
-    if (outcome == AudioEngineInterruptionEndOutcomePaused || readyToStart) {
-      notifyInput = [self inputNotificationBlock:AudioEngineInputNotificationHardwareChanged];
+    if (outcome == AudioEngineInterruptionEndOutcomePaused) {
+      [self notifyInputOfRebuiltGraph:lock];
+      return outcome;
     }
-  }
-
-  // Before starting: the input's consumers must match the new format before the first render.
-  if (notifyInput != nil) {
-    notifyInput();
-  }
-
-  if (!readyToStart) {
-    return outcome;
-  }
-
-  std::scoped_lock lock(_engineLock);
-
-  // Only the engine rebuilt above may be started. If it was dropped or replaced while the lock
-  // was released (a pauseInput, an attach that created a partial engine, a restartAudioEngine,
-  // a failed start) and the state is still Interrupted, decide again under this lock. An engine
-  // that left Interrupted meanwhile (a start that succeeded) is settled by
-  // startAfterInterruption.
-  if (self.audioEngine != rebuiltEngine &&
-      self.state == AudioEngineState::AudioEngineStateInterrupted) {
-    outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
 
     if (!readyToStart) {
       return outcome;
     }
-  }
 
-  return [self startAfterInterruption];
+    // A graph replaced while the input was notified is decided again while still Interrupted;
+    // one that left Interrupted meanwhile (a start that succeeded) is settled by
+    // startAfterInterruption.
+    if ([self notifyInputOfRebuiltGraph:lock] ||
+        self.state != AudioEngineState::AudioEngineStateInterrupted) {
+      return [self startAfterInterruption];
+    }
+  }
 }
 
 /// @brief Rebuilds an interrupted engine for resuming, or leaves it `Paused` when policy says
@@ -711,8 +701,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return AudioEngineInterruptionEndOutcomeStillInterrupted;
   }
 
-  [self stopEngine];
-  [self rebuildAudioEngine];
+  [self rebuildGraphForCurrentHardware];
 
   if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(
@@ -729,7 +718,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
 /// @brief Starts the current engine, unless it was stopped or started meanwhile. Lock held.
 /// @discussion The caller makes sure the current engine is the one rebuildAfterInterruption:
-/// just built, never one created or replaced while the lock was released.
+/// just built and `notifyInputOfRebuiltGraph:` let through.
 - (AudioEngineInterruptionEndOutcome)startAfterInterruption
 {
   if (self.state == AudioEngineState::AudioEngineStateRunning && [self.audioEngine isRunning]) {
@@ -740,34 +729,46 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return AudioEngineInterruptionEndOutcomeNoOp;
   }
 
-  NSError *error = nil;
-  [self.audioEngine prepare];
-  [self.audioEngine startAndReturnError:&error];
-
-  if (error != nil) {
-    NSLog(
-        @"Error while restarting the audio engine after interruption: %@",
-        [error debugDescription]);
+  if (![self startBuiltEngineLocked]) {
     return AudioEngineInterruptionEndOutcomeStillInterrupted;
   }
 
   self.state = AudioEngineState::AudioEngineStateRunning;
-  self.sessionDeactivationInvalidatedGraph = false;
   return AudioEngineInterruptionEndOutcomeRunning;
 }
 
-/// @brief The registered input's handler bound to @p notification, or nil without one.
-/// @discussion Run it only after releasing `_engineLock`: the handler calls back into the engine.
-// TODO: replace the returned blocks with explicit post-lock effects in the engine refactor.
-- (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification
+/// @brief Lets the live input catch up with the graph `rebuildAudioEngine` built for it. Lock
+/// held on entry and exit.
+/// @discussion While `_inputAwaitsHardwareChange` is set, runs the input's `HardwareChanged`
+/// handler with @p lock released, since the handler calls back into the engine. Others may
+/// rebuild, drop or start the engine meanwhile; a build another caller is still notifying is
+/// notified again here. Every rebuild meant for a start leaves `graphIsStale` false, so a stale
+/// mark seen afterwards was set while the lock was released (a route change, a session
+/// deactivation or reconfiguration).
+/// @return Whether the current graph may be started. NO when the engine was replaced or marked
+/// stale while the lock was released: the caller decides again.
+- (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock
 {
-  void (^handler)(AudioEngineInputNotification) = self.inputRegistration.onInputNotification;
-
-  if (handler == nil || ![self hasLiveInput]) {
-    return nil;
+  if (!_inputAwaitsHardwareChange) {
+    return YES;
   }
 
-  return ^{ handler(notification); };
+  AVAudioEngine *notifiedEngine = self.audioEngine;
+  void (^onInputNotification)(AudioEngineInputNotification) =
+      self.inputRegistration.onInputNotification;
+
+  if (onInputNotification != nil && [self hasLiveInput]) {
+    lock.unlock();
+    onInputNotification(AudioEngineInputNotificationHardwareChanged);
+    lock.lock();
+  }
+
+  if (self.audioEngine != notifiedEngine || [self graphIsStale]) {
+    return NO;
+  }
+
+  _inputAwaitsHardwareChange = NO;
+  return YES;
 }
 
 - (AudioEngineState)getState
@@ -808,12 +809,17 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 }
 
-/// @brief True when the graph may no longer match the hardware: interrupted, session
-/// deactivated, or hardware changed while stopped.
+/// @brief True when the graph may no longer match the hardware: interrupted, or marked stale.
 - (BOOL)mustRebuildBeforeStart
 {
-  return self.state == AudioEngineState::AudioEngineStateInterrupted || self.graphNeedsRebuild ||
-      self.sessionDeactivationInvalidatedGraph;
+  return self.state == AudioEngineState::AudioEngineStateInterrupted || [self graphIsStale];
+}
+
+/// @brief True when the graph was marked for rebuild: session deactivated, or hardware changed
+/// while stopped.
+- (BOOL)graphIsStale
+{
+  return self.graphNeedsRebuild || self.sessionDeactivationInvalidatedGraph;
 }
 
 /// @brief Stops the engine if running, rebuilds it, and forgets a past session deactivation;
@@ -850,6 +856,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
   [self materializeTrackedNodesIfNeeded];
   self.graphNeedsRebuild = false;
+  _inputAwaitsHardwareChange = [self hasLiveInput];
 }
 
 - (bool)startEngine
@@ -876,17 +883,28 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return false;
   }
 
-  [self.audioEngine prepare];
-  [self.audioEngine startAndReturnError:&error];
-
-  if (error != nil) {
-    NSLog(@"Error while starting the audio engine: %@", [error debugDescription]);
+  if (![self startBuiltEngineLocked]) {
     return false;
   }
 
   self.state = AudioEngineState::AudioEngineStateRunning;
-  self.sessionDeactivationInvalidatedGraph = false;
   return true;
+}
+
+/// @brief Prepares and starts the current engine. Lock held.
+/// @discussion Every start goes through here, and only its YES lets the state become `Running`:
+/// `startAndReturnError:` may return NO without setting an error.
+- (BOOL)startBuiltEngineLocked
+{
+  NSError *error = nil;
+  [self.audioEngine prepare];
+
+  if ([self.audioEngine startAndReturnError:&error]) {
+    return YES;
+  }
+
+  NSLog(@"[AudioEngine] Error while starting the audio engine: %@", [error debugDescription]);
+  return NO;
 }
 
 - (void)stopEngine
@@ -904,33 +922,48 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
 - (bool)startIfNecessary
 {
-  std::scoped_lock lock(_engineLock);
-  return [self startIfNecessaryLocked];
+  std::unique_lock lock(_engineLock);
+  return [self startIfNecessaryLocked:lock];
 }
 
-/// @brief `startIfNecessary` for callers already holding `_engineLock`, which is not recursive.
-- (bool)startIfNecessaryLocked
+/// @brief `startIfNecessary` for callers already holding @p lock, which is not recursive. Lock
+/// held on entry and exit, released while a rebuilt graph's input is notified.
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock
 {
-  if (self.state == AudioEngineState::AudioEngineStateRunning && self.audioEngine != nil &&
-      [self.audioEngine isRunning]) {
-    [self materializeTrackedNodesIfNeeded];
-    return true;
+  BOOL mustRebuild = [self mustRebuildBeforeStart];
+  BOOL inputNotified = NO;
+
+  // The guards run again after the input was notified: the graph may have been started or
+  // emptied while the lock was released.
+  while (true) {
+    if (self.state == AudioEngineState::AudioEngineStateRunning && self.audioEngine != nil &&
+        [self.audioEngine isRunning]) {
+      [self materializeTrackedNodesIfNeeded];
+      return true;
+    }
+
+    if (![self hasTrackedGraph]) {
+      return false;
+    }
+
+    if (inputNotified) {
+      break;
+    }
+
+    if (mustRebuild) {
+      [self rebuildGraphForCurrentHardware];
+    }
+
+    inputNotified = [self notifyInputOfRebuiltGraph:lock];
+    mustRebuild = !inputNotified && [self graphIsStale];
   }
 
-  if (![self hasTrackedGraph]) {
+  if (![self startEngine]) {
+    [self settleStateAfterFailedStart];
     return false;
   }
 
-  if ([self mustRebuildBeforeStart]) {
-    [self rebuildGraphForCurrentHardware];
-  }
-
-  if ([self startEngine]) {
-    return true;
-  }
-
-  [self settleStateAfterFailedStart];
-  return false;
+  return true;
 }
 
 - (void)stopIfNecessary
@@ -954,36 +987,33 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
 - (void)restartAudioEngine
 {
-  BOOL shouldResume = NO;
-  dispatch_block_t notifyInput = nil;
+  std::unique_lock lock(_engineLock);
 
-  {
-    std::scoped_lock lock(_engineLock);
+  // The engine is created lazily on first node attach. Apps that only use
+  // session management and notifications never have one, and a system-driven
+  // restart (media services reset, configuration change) must not create it.
+  if (![self hasTrackedGraph] && self.audioEngine == nil) {
+    return;
+  }
 
-    // The engine is created lazily on first node attach. Apps that only use
-    // session management and notifications never have one, and a system-driven
-    // restart (media services reset, configuration change) must not create it.
-    if (![self hasTrackedGraph] && self.audioEngine == nil) {
+  const BOOL shouldResume = self.state == AudioEngineState::AudioEngineStateRunning;
+  [self rebuildGraphForCurrentHardware];
+
+  if (!shouldResume) {
+    return;
+  }
+
+  while (![self notifyInputOfRebuiltGraph:lock]) {
+    if (self.state != AudioEngineState::AudioEngineStateRunning) {
       return;
     }
 
-    shouldResume = self.state == AudioEngineState::AudioEngineStateRunning;
-    [self rebuildGraphForCurrentHardware];
-
-    if (shouldResume) {
-      notifyInput = [self inputNotificationBlock:AudioEngineInputNotificationHardwareChanged];
+    if ([self graphIsStale]) {
+      [self rebuildGraphForCurrentHardware];
     }
   }
 
-  // Before starting: the input's consumers must match the new format before the first render.
-  if (notifyInput != nil) {
-    notifyInput();
-  }
-
-  if (shouldResume) {
-    std::scoped_lock lock(_engineLock);
-    [self resumeAfterRebuild];
-  }
+  [self resumeAfterRebuild];
 }
 
 - (void)logAudioEngineState

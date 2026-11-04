@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -58,9 +59,20 @@ class IOSAudioRecorder : public AudioRecorder {
   /// input disarmed meanwhile so no buffer in either format slips through.
   Result<NoneType, std::string> reprepareForLiveInput();
   void handleInputNotification(AudioEngineInputNotification notification);
+  /// Re-points the outputs at the live input format and arms the input while Recording. Apart
+  /// from `start()`, which prepares the outputs against the format it has just read, this is the
+  /// only place that arms the input, so it is armed only while the outputs match that format.
   void handleHardwareChange();
 
   int32_t inputChannelCount_{0};
+  /// Serializes `handleHardwareChange()` and `start()`. The engine may notify the same rebuilt
+  /// graph from two threads and starts it once either call returns, so a returning call must
+  /// find the outputs already re-prepared for the live format; and a call for a session that has
+  /// since stopped must finish before a new session prepares its outputs. Lock order: this
+  /// mutex, then the consumer mutexes, then `_engineLock` (briefly). The handler takes it only
+  /// after its `isIdle()` check, so the notification `start()`'s own engine start sends on the
+  /// same thread returns before reaching it.
+  std::mutex hardwareChangeMutex_;
 };
 
 } // namespace audioapi
