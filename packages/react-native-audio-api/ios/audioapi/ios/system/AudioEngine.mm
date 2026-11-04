@@ -939,7 +939,10 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 - (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock keepingLock:(BOOL)keepingLock
 {
   BOOL mustRebuild = [self mustRebuildBeforeStart];
+  BOOL inputNotified = NO;
 
+  // The guards run again after the input was notified: the graph may have been started or
+  // emptied while the lock was released.
   while (true) {
     if (self.state == AudioEngineState::AudioEngineStateRunning && self.audioEngine != nil &&
         [self.audioEngine isRunning]) {
@@ -951,15 +954,20 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
       return false;
     }
 
+    if (inputNotified) {
+      break;
+    }
+
     if (mustRebuild) {
       [self rebuildGraphForCurrentHardware];
     }
 
-    if (keepingLock || [self notifyInputOfRebuiltGraph:lock]) {
+    if (keepingLock) {
       break;
     }
 
-    mustRebuild = [self graphIsStale];
+    inputNotified = [self notifyInputOfRebuiltGraph:lock];
+    mustRebuild = !inputNotified && [self graphIsStale];
   }
 
   if (![self startEngine]) {

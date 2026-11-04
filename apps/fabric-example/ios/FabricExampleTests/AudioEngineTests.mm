@@ -1059,6 +1059,26 @@
   XCTAssertEqual(enginesNotifiedBeforeStart.lastObject, startedEngine);
 }
 
+- (void)testStartIfNecessaryDoesNotStartGraphEmptiedDuringNotification {
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  __block NSString *sourceNodeId = nil;
+  // The recorder stops and the only player detaches while the lock is free.
+  [self attachInputRecordingEnginesNotifiedBeforeStart:^{
+    [weakEngine detachInputNode];
+    [weakEngine detachSourceNodeWithId:sourceNodeId];
+    [weakEngine stopIfPossible];
+  }];
+  sourceNodeId = [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStatePaused;
+  self.audioEngine.graphNeedsRebuild = YES;
+
+  XCTAssertFalse([self.audioEngine startIfNecessary]);
+
+  XCTAssertEqual(
+      self.audioEngine.createdFakeEngines.lastObject.startCallCount, 0);
+  XCTAssertNotEqual(self.audioEngine.state, AudioEngineStateRunning);
+}
+
 - (void)
     testInterruptionEndNotifiesInputOfGraphRebuiltAfterReplacementInNotification {
   __weak TestableAudioEngine *weakEngine = self.audioEngine;
