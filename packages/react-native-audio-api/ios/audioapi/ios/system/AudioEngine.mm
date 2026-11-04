@@ -60,6 +60,7 @@
 - (BOOL)mustRebuildBeforeStart;
 - (void)rebuildGraphForCurrentHardware;
 - (void)settleStateAfterFailedStart;
+- (BOOL)startBuiltEngineLocked;
 - (void)resumeAfterRebuild;
 - (bool)startIfNecessaryLocked;
 - (void)markInputPausedLocked;
@@ -740,14 +741,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return AudioEngineInterruptionEndOutcomeNoOp;
   }
 
-  NSError *error = nil;
-  [self.audioEngine prepare];
-  [self.audioEngine startAndReturnError:&error];
-
-  if (error != nil) {
-    NSLog(
-        @"Error while restarting the audio engine after interruption: %@",
-        [error debugDescription]);
+  if (![self startBuiltEngineLocked]) {
     return AudioEngineInterruptionEndOutcomeStillInterrupted;
   }
 
@@ -876,17 +870,29 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return false;
   }
 
-  [self.audioEngine prepare];
-  [self.audioEngine startAndReturnError:&error];
-
-  if (error != nil) {
-    NSLog(@"Error while starting the audio engine: %@", [error debugDescription]);
+  if (![self startBuiltEngineLocked]) {
     return false;
   }
 
   self.state = AudioEngineState::AudioEngineStateRunning;
   self.sessionDeactivationInvalidatedGraph = false;
   return true;
+}
+
+/// @brief Prepares and starts the current engine. Lock held.
+/// @discussion Every start goes through here, and only its YES lets the state become `Running`:
+/// `startAndReturnError:` may return NO without setting an error.
+- (BOOL)startBuiltEngineLocked
+{
+  NSError *error = nil;
+  [self.audioEngine prepare];
+
+  if ([self.audioEngine startAndReturnError:&error]) {
+    return YES;
+  }
+
+  NSLog(@"[AudioEngine] Error while starting the audio engine: %@", [error debugDescription]);
+  return NO;
 }
 
 - (void)stopEngine
