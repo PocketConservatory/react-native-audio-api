@@ -69,8 +69,7 @@
 - (void)settleStateAfterFailedStart;
 - (BOOL)startBuiltEngineLocked;
 - (void)resumeAfterRebuild;
-- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock
-                notifyingInput:(BOOL)notifyInput;
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock keepingLock:(BOOL)keepingLock;
 - (void)markInputPausedLocked;
 - (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
@@ -540,7 +539,9 @@ static AudioEngine *_sharedInstance = nil;
     }
   }
 
-  if ([self startIfNecessaryLocked:lock notifyingInput:NO]) {
+  if ([self startIfNecessaryLocked:lock keepingLock:YES]) {
+    // The resuming recorder refreshes its format itself once this returns.
+    _inputAwaitsHardwareChange = NO;
     return true;
   }
 
@@ -929,13 +930,13 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 - (bool)startIfNecessary
 {
   std::unique_lock lock(_engineLock);
-  return [self startIfNecessaryLocked:lock notifyingInput:YES];
+  return [self startIfNecessaryLocked:lock keepingLock:NO];
 }
 
 /// @brief `startIfNecessary` for callers already holding @p lock, which is not recursive.
-/// @param notifyInput NO only for `resumeInput`, which never releases @p lock: its recorder
-/// refreshes its format itself once the resume succeeds.
-- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock notifyingInput:(BOOL)notifyInput
+/// @param keepingLock YES never releases @p lock, so a rebuilt graph is started without
+/// notifying its input; the caller then settles `_inputAwaitsHardwareChange` itself.
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock keepingLock:(BOOL)keepingLock
 {
   BOOL mustRebuild = [self mustRebuildBeforeStart];
 
@@ -954,7 +955,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
       [self rebuildGraphForCurrentHardware];
     }
 
-    if (!notifyInput || [self notifyInputOfRebuiltGraph:lock]) {
+    if (keepingLock || [self notifyInputOfRebuiltGraph:lock]) {
       break;
     }
 
@@ -964,10 +965,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   if (![self startEngine]) {
     [self settleStateAfterFailedStart];
     return false;
-  }
-
-  if (!notifyInput) {
-    _inputAwaitsHardwareChange = NO;
   }
 
   return true;
