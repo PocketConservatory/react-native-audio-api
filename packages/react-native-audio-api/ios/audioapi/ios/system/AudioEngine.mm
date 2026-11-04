@@ -759,7 +759,10 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 /// @discussion While `_inputAwaitsHardwareChange` is set, runs the input's `HardwareChanged`
 /// handler with @p lock released, since the handler calls back into the engine. Others may
 /// rebuild, drop or start the engine meanwhile; a build some other caller is still notifying
-/// is notified again here, as the handler tolerates repeats.
+/// is notified again here, and started as soon as this call lets it through. So the handler
+/// must leave the input's consumers matching the live format by the time any call returns,
+/// even while another call for the same build is in flight (`IOSAudioRecorder` serializes
+/// its handling).
 /// Every rebuild meant for a start leaves `graphIsStale` false, so a stale mark seen afterwards
 /// was set while the lock was released (a route change, a session deactivation or
 /// reconfiguration).
