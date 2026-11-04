@@ -96,6 +96,9 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 /// True only for the AVAudioEngine this object drives now: not nil, foreign or replaced ones.
 - (bool)isCurrentEngine:(AVAudioEngine *)engine;
 
+/// @brief Starts the engine for the tracked graph, rebuilding it first when it may no longer
+/// match the hardware. A graph rebuilt with a live input is started only after the input heard
+/// `HardwareChanged` for it, outside the lock.
 - (bool)startIfNecessary;
 - (void)stopIfNecessary;
 

@@ -1019,6 +1019,66 @@
   }];
 }
 
+/// Attaches an input that records each engine it hears `HardwareChanged` for
+/// while that engine has not been started yet, and runs
+/// @p onFirstNotification inside the first notification.
+- (NSArray<FakeAudioEngine *> *)attachInputRecordingEnginesNotifiedBeforeStart:
+    (void (^)(void))onFirstNotification {
+  NSMutableArray<FakeAudioEngine *> *enginesNotifiedBeforeStart =
+      [[NSMutableArray alloc] init];
+  __block NSInteger notificationCount = 0;
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  [self attachTestInputWithNotification:^(
+            __unused AudioEngineInputNotification notification) {
+    FakeAudioEngine *engine = weakEngine.currentFakeAudioEngine;
+    if (engine.startCallCount == 0) {
+      [enginesNotifiedBeforeStart addObject:engine];
+    }
+
+    notificationCount += 1;
+    if (notificationCount == 1 && onFirstNotification != nil) {
+      onFirstNotification();
+    }
+  }];
+  return enginesNotifiedBeforeStart;
+}
+
+- (void)testStartIfNecessaryNotifiesLiveInputBeforeStartingRebuiltGraph {
+  NSArray<FakeAudioEngine *> *enginesNotifiedBeforeStart =
+      [self attachInputRecordingEnginesNotifiedBeforeStart:nil];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStatePaused;
+  self.audioEngine.graphNeedsRebuild = YES;
+
+  // A player starts the engine the recording shares.
+  XCTAssertTrue([self.audioEngine startIfNecessary]);
+
+  FakeAudioEngine *startedEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(startedEngine, self.audioEngine.createdFakeEngines.lastObject);
+  XCTAssertEqual(startedEngine.startCallCount, 1);
+  XCTAssertEqual(enginesNotifiedBeforeStart.lastObject, startedEngine);
+}
+
+- (void)
+    testInterruptionEndNotifiesInputOfGraphRebuiltAfterReplacementInNotification {
+  __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  // A media services reset rebuilds the still-interrupted engine meanwhile.
+  NSArray<FakeAudioEngine *> *enginesNotifiedBeforeStart =
+      [self attachInputRecordingEnginesNotifiedBeforeStart:^{
+        [weakEngine restartAudioEngine];
+      }];
+  [self attachSourceNodeToAudioEngine];
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  XCTAssertEqual([self.audioEngine onInterruptionEnd:true],
+                 AudioEngineInterruptionEndOutcomeRunning);
+
+  FakeAudioEngine *startedEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(startedEngine, self.audioEngine.createdFakeEngines.lastObject);
+  XCTAssertEqual(startedEngine.startCallCount, 1);
+  XCTAssertEqual(enginesNotifiedBeforeStart.lastObject, startedEngine);
+}
+
 - (void)
     testPauseInputDuringInterruptionEndNotificationResumesSourceWithoutInput {
   [self attachInputPausedByHardwareChangedNotification];
@@ -1068,11 +1128,15 @@
 
 - (void)testStartDuringInterruptionEndNotificationReportsRunning {
   __weak TestableAudioEngine *weakEngine = self.audioEngine;
+  __block BOOL playerStarted = NO;
   // A player starting the engine now rebuilds and starts it before the
   // interruption end re-takes the lock.
   [self attachTestInputWithNotification:^(
             __unused AudioEngineInputNotification notification) {
-    [weakEngine startIfNecessary];
+    if (!playerStarted) {
+      playerStarted = YES;
+      [weakEngine startIfNecessary];
+    }
   }];
   [self attachSourceNodeToAudioEngine];
   self.audioEngine.state = AudioEngineStateInterrupted;
