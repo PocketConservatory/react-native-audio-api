@@ -80,6 +80,7 @@ class FakeAudioRecorder : public AudioRecorder {
   // Mirrors the platform recorders: pause() goes through the shared markPaused(), and
   // isRecording() also requires a live stream, which a reconnect takes away.
   bool streamReconnecting = false;
+  int reopenCount = 0;
 
   void pause() override {
     markPaused();
@@ -88,6 +89,10 @@ class FakeAudioRecorder : public AudioRecorder {
     if (state_ == RecorderState::Paused) {
       state_ = RecorderState::Recording;
     }
+  }
+
+  void reopenInputStream() override {
+    reopenCount += 1;
   }
 
   void connect(const std::shared_ptr<RecorderAdapterNode> &) override {}
@@ -170,6 +175,23 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeReachARecorderWhoseStreamIsReconnec
 
   EXPECT_EQ(handle.pause(), RecorderState::Paused);
   EXPECT_EQ(handle.resume(), RecorderState::Recording);
+}
+
+TEST(ActiveRecorderHandleTest, ReopenInputStreamReachesOnlyAnActiveSession) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+
+  handle.reopenInputStream();
+  ASSERT_TRUE(handle.tryStart(recorder, "").is_ok());
+  handle.reopenInputStream();
+  handle.pause();
+  handle.reopenInputStream();
+  EXPECT_EQ(recorder->reopenCount, 2);
+
+  ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
+  handle.reopenInputStream();
+  EXPECT_EQ(recorder->reopenCount, 2);
 }
 
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {

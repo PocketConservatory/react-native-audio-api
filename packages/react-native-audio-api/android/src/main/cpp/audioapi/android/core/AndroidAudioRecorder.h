@@ -56,6 +56,8 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   /// disconnect reclaim keeps the old id until the reopened stream's id replaces it.
   [[nodiscard]] int32_t audioSessionId() const override;
 
+  void reopenInputStream() override;
+
  protected:
   void clearAdapterScratchState() override;
 
@@ -75,6 +77,7 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
 
   std::vector<std::string> recordingSegmentPaths_;
   Result<NoneType, std::string> openAudioStream();
+  void replaceStream();
   std::shared_ptr<AudioFileWriter> createFileWriter(
       const std::shared_ptr<AudioFileProperties> &props);
   Result<NoneType, std::string> setupFileWriter(

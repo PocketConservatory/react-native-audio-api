@@ -532,6 +532,31 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
     return;
   }
 
+  replaceStream();
+}
+
+/// @brief Replaces the stream of an active session with a fresh one (see the header).
+/// Android keeps a capture silenced for good when it started while the app couldn't record:
+/// the system checks the RECORD_AUDIO app op once, when the capture starts, and re-checks it
+/// only when the op's setting changes, not when the app regains the microphone. A stream the
+/// disconnect reclaim opened during a call is such a capture, so RecordingSilenceListener asks
+/// for a fresh one once the call is over and the capture is still silenced.
+/// Callable from any thread except the main looper, since it waits on the recorder locks and
+/// on the old stream's stop.
+void AndroidAudioRecorder::reopenInputStream() {
+  std::scoped_lock reopenLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+
+  if (isIdle() || mStream_ == nullptr) {
+    return;
+  }
+
+  mStream_->requestStop();
+  replaceStream();
+}
+
+/// @brief Closes the current stream and opens and starts a new one, keeping the session state.
+/// Called under the recorder locks with a stream present.
+void AndroidAudioRecorder::replaceStream() {
   // A paused session stays paused across the reclaim: its state is restored,
   // so the fresh stream runs but writes nothing until resume(). cleanup() keeps
   // the published session id, which names the old stream until the new one

@@ -10,6 +10,7 @@ import com.swmansion.audioapi.AudioAPIModule
 import java.lang.ref.WeakReference
 import java.util.HashMap
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * Reports when the system silences the active recorder's capture (a call, the assistant, another
@@ -34,7 +35,18 @@ import java.util.concurrent.Executor
  *   call mode starts after `began`. Trade-off: a configuration first seen already silenced while
  *   the mode is already a call (a recording started mid-call, or a reclaimed stream) doesn't hold
  *   `ended`, so an unsilence mid-call ends that interruption early.
+ * - When a call mode seen during the interruption is over (the mode is no longer a call mode)
+ *   and the configuration is still silenced after [CALL_END_GRACE_MS], the recorder's input
+ *   stream is reopened once for that call ([NativeRecorderControl.reopenInputStream]). A stream
+ *   opened while the app couldn't record, as the disconnect reclaim does mid-call, stays
+ *   silenced after the call; its fresh replacement is unsilenced, and its configuration then
+ *   emits `ended` through the rule above.
+ *   If the replacement is still silenced, the interruption stays in progress until the next
+ *   call ends or the session stops.
  * - With no active recorder session the state resets without emitting.
+ *
+ * The audio mode is observed from `began` until the interruption ends: through the mode listener
+ * on API 31+, and a poll on API 29–30.
  *
  * Requires API 29+; a no-op below. State is written on the main looper only.
  */
@@ -48,15 +60,25 @@ class RecordingSilenceListener(
   private var enabledCount = 0
   private var released = false
   private var recordingCallback: AudioManager.AudioRecordingCallback? = null
-  private var awaitingCallEnd = false
+  private var observingMode = false
+
+  /** Whether a call mode was current during this interruption since `began` or the last reopen. */
+  private var callModeSeen = false
+  private var reopenCheckPending = false
+  private val reopenExecutor = Executors.newSingleThreadExecutor()
+  private val reopenCheck =
+    Runnable {
+      reopenCheckPending = false
+      reopenIfStillSilenced()
+    }
 
   // AudioManager.OnModeChangedListener (API 31+), held untyped so older runtimes never resolve it.
   private var modeChangedListener: Any? = null
   private val modePoll =
     object : Runnable {
       override fun run() {
-        tryEmitEnded()
-        if (awaitingCallEnd) {
+        evaluate()
+        if (observingMode) {
           handler.postDelayed(this, MODE_POLL_INTERVAL_MS)
         }
       }
@@ -103,6 +125,7 @@ class RecordingSilenceListener(
       released = true
       enabledCount = 0
       unregister()
+      reopenExecutor.shutdown()
     }
   }
 
@@ -149,56 +172,105 @@ class RecordingSilenceListener(
     val config = configs.firstOrNull { it.clientAudioSessionId == sessionId } ?: return
 
     captureSilenced = config.isClientSilenced
-    if (captureSilenced) {
-      stopAwaitingCallEnd()
-      if (modeAtBegan == null) {
-        modeAtBegan = currentMode()
-        emit(began = true)
-      }
-    } else {
-      tryEmitEnded()
+    if (captureSilenced && modeAtBegan == null) {
+      modeAtBegan = currentMode()
+      emit(began = true)
+      startObservingMode()
     }
+    evaluate()
   }
 
-  private fun tryEmitEnded() {
-    if (modeAtBegan == null || captureSilenced) {
-      stopAwaitingCallEnd()
+  /**
+   * Applies the class rules to the current configuration state and audio mode: emits `ended`, or
+   * schedules the reopen of a stream a finished call left silenced.
+   */
+  private fun evaluate() {
+    val began = modeAtBegan
+    if (began == null) {
+      stopObservingMode()
+      cancelReopenCheck()
       return
     }
+    val mode = currentMode()
+    if (isCallMode(mode)) {
+      callModeSeen = true
+    }
+    if (captureSilenced) {
+      if (callModeSeen && !isCallMode(mode)) {
+        scheduleReopenCheck()
+      } else {
+        cancelReopenCheck()
+      }
+      return
+    }
+    cancelReopenCheck()
     if (isEndedHeld()) {
-      startAwaitingCallEnd()
       return
     }
-    stopAwaitingCallEnd()
     modeAtBegan = null
+    callModeSeen = false
+    stopObservingMode()
     emit(began = false)
   }
 
+  private fun scheduleReopenCheck() {
+    if (reopenCheckPending) {
+      return
+    }
+    reopenCheckPending = true
+    handler.postDelayed(reopenCheck, CALL_END_GRACE_MS)
+  }
+
+  private fun cancelReopenCheck() {
+    if (!reopenCheckPending) {
+      return
+    }
+    reopenCheckPending = false
+    handler.removeCallbacks(reopenCheck)
+  }
+
+  private fun reopenIfStillSilenced() {
+    if (modeAtBegan == null ||
+      !captureSilenced ||
+      !callModeSeen ||
+      isCallMode(currentMode()) ||
+      NativeRecorderControl.audioSessionId() == 0
+    ) {
+      return
+    }
+    callModeSeen = false
+    // The reopen waits on the recorder locks and the old stream's stop, so it runs off the main
+    // looper. The fresh stream's configuration arrives through the recording callback.
+    reopenExecutor.execute { NativeRecorderControl.reopenInputStream() }
+  }
+
   private fun reset() {
-    stopAwaitingCallEnd()
+    stopObservingMode()
+    cancelReopenCheck()
     modeAtBegan = null
+    callModeSeen = false
     captureSilenced = false
   }
 
-  private fun startAwaitingCallEnd() {
-    if (awaitingCallEnd) {
+  private fun startObservingMode() {
+    if (observingMode) {
       return
     }
-    awaitingCallEnd = true
+    observingMode = true
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       addModeChangedListener()
       // A mode change between the last read and the registration would otherwise be lost.
-      handler.post { tryEmitEnded() }
+      handler.post { evaluate() }
     } else {
       handler.postDelayed(modePoll, MODE_POLL_INTERVAL_MS)
     }
   }
 
-  private fun stopAwaitingCallEnd() {
-    if (!awaitingCallEnd) {
+  private fun stopObservingMode() {
+    if (!observingMode) {
       return
     }
-    awaitingCallEnd = false
+    observingMode = false
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       removeModeChangedListener()
     } else {
@@ -208,7 +280,7 @@ class RecordingSilenceListener(
 
   @RequiresApi(Build.VERSION_CODES.S)
   private fun addModeChangedListener() {
-    val listener = AudioManager.OnModeChangedListener { tryEmitEnded() }
+    val listener = AudioManager.OnModeChangedListener { evaluate() }
     modeChangedListener = listener
     audioManager.get()?.addOnModeChangedListener(mainExecutor, listener)
   }
@@ -246,5 +318,11 @@ class RecordingSilenceListener(
 
   companion object {
     private const val MODE_POLL_INTERVAL_MS = 1_000L
+
+    /**
+     * How long a capture may stay silenced after a call before its stream is reopened. The system
+     * unsilences its other captures within about a second of the mode change.
+     */
+    private const val CALL_END_GRACE_MS = 2_000L
   }
 }

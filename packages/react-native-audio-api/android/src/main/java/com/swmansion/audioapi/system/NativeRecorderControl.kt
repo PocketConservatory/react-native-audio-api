@@ -31,8 +31,18 @@ object NativeRecorderControl {
    */
   fun audioSessionId(): Int = activeAudioSessionId()
 
+  /**
+   * Replaces the active recorder's input stream with a freshly opened one, keeping the session
+   * state; a no-op when no session is active. Blocks on the recorder, so call it off the main
+   * thread.
+   */
+  fun reopenInputStream() = reopenActiveInputStream()
+
   @JvmStatic
   private external fun activeAudioSessionId(): Int
+
+  @JvmStatic
+  private external fun reopenActiveInputStream()
 
   @JvmStatic
   private external fun stopActiveRecording(): Int
