@@ -39,8 +39,7 @@
   /// Set when `rebuildAudioEngine` builds a graph with a live input; cleared once that input
   /// heard `HardwareChanged` for this exact engine (`notifyInputOfRebuiltGraph:`) or when the
   /// engine is destroyed. No graph is started while it is set, so the input's consumers match
-  /// the new format before the first render. The one exception is `resumeInput`, which keeps
-  /// the lock and clears it on success: its recorder refreshes its format after the resume.
+  /// the new format before the first render.
   BOOL _inputAwaitsHardwareChange;
 }
 
@@ -69,7 +68,7 @@
 - (void)settleStateAfterFailedStart;
 - (BOOL)startBuiltEngineLocked;
 - (void)resumeAfterRebuild;
-- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock keepingLock:(BOOL)keepingLock;
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock;
 - (void)markInputPausedLocked;
 - (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
@@ -539,9 +538,7 @@ static AudioEngine *_sharedInstance = nil;
     }
   }
 
-  if ([self startIfNecessaryLocked:lock keepingLock:YES]) {
-    // The resuming recorder refreshes its format itself once this returns.
-    _inputAwaitsHardwareChange = NO;
+  if ([self startIfNecessaryLocked:lock]) {
     return true;
   }
 
@@ -930,13 +927,12 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 - (bool)startIfNecessary
 {
   std::unique_lock lock(_engineLock);
-  return [self startIfNecessaryLocked:lock keepingLock:NO];
+  return [self startIfNecessaryLocked:lock];
 }
 
-/// @brief `startIfNecessary` for callers already holding @p lock, which is not recursive.
-/// @param keepingLock YES never releases @p lock, so a rebuilt graph is started without
-/// notifying its input; the caller then settles `_inputAwaitsHardwareChange` itself.
-- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock keepingLock:(BOOL)keepingLock
+/// @brief `startIfNecessary` for callers already holding @p lock, which is not recursive. Lock
+/// held on entry and exit, released while a rebuilt graph's input is notified.
+- (bool)startIfNecessaryLocked:(std::unique_lock<std::mutex> &)lock
 {
   BOOL mustRebuild = [self mustRebuildBeforeStart];
   BOOL inputNotified = NO;
@@ -960,10 +956,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
     if (mustRebuild) {
       [self rebuildGraphForCurrentHardware];
-    }
-
-    if (keepingLock) {
-      break;
     }
 
     inputNotified = [self notifyInputOfRebuiltGraph:lock];

@@ -1059,6 +1059,22 @@
   XCTAssertEqual(enginesNotifiedBeforeStart.lastObject, startedEngine);
 }
 
+- (void)testResumeInputNotifiesInputBeforeStartingRebuiltGraph {
+  NSArray<FakeAudioEngine *> *enginesNotifiedBeforeStart =
+      [self attachInputRecordingEnginesNotifiedBeforeStart:nil];
+  [self attachSourceNodeToAudioEngine];
+  // An interruption end that did not resume left a stale graph behind.
+  self.audioEngine.state = AudioEngineStatePaused;
+  self.audioEngine.sessionDeactivationInvalidatedGraph = YES;
+
+  XCTAssertTrue([self.audioEngine resumeInput]);
+
+  FakeAudioEngine *startedEngine = self.audioEngine.currentFakeAudioEngine;
+  XCTAssertEqual(startedEngine, self.audioEngine.createdFakeEngines.lastObject);
+  XCTAssertEqual(startedEngine.startCallCount, 1);
+  XCTAssertEqual(enginesNotifiedBeforeStart.lastObject, startedEngine);
+}
+
 - (void)testStartIfNecessaryDoesNotStartGraphEmptiedDuringNotification {
   __weak TestableAudioEngine *weakEngine = self.audioEngine;
   __block NSString *sourceNodeId = nil;
@@ -1323,7 +1339,8 @@
   XCTAssertNotNil(self.audioEngine.inputNode);
   XCTAssertEqual(recordingEngine.startCallCount, 1);
   XCTAssertNotNil([self.audioEngine getLiveInputFormat]);
-  XCTAssertEqual(notificationCount, 0);
+  // Only the resume, which rebuilt the graph with the input, notified it.
+  XCTAssertEqual(notificationCount, 1);
 }
 
 - (void)testFailedResumeOfUnpausedInputKeepsEngineInterruptedAndInputLive {

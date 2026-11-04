@@ -73,8 +73,8 @@ typedef void (^OnOutputRecoveryFailedBlock)(void);
 /// with it. On failure the paused mark is restored, the engine built with the input is dropped
 /// as `pauseInput` drops it, and the state settles as a failed `startIfNecessary` does (an
 /// Interrupted engine stays Interrupted); sources a stopped engine was playing hear
-/// `onOutputRecoveryFailed`. Does not notify the input: its recorder refreshes
-/// its format and re-arms itself after a successful resume.
+/// `onOutputRecoveryFailed`. A graph rebuilt with the input is started only after the input
+/// heard `HardwareChanged`, outside the lock, as in `startIfNecessary`.
 /// @return Whether the engine is running with the input live.
 - (bool)resumeInput;
 
