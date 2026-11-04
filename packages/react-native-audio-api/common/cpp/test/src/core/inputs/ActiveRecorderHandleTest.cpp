@@ -1,10 +1,15 @@
 #include <audioapi/core/inputs/ActiveRecorderHandle.h>
 #include <audioapi/core/inputs/AudioRecorder.h>
+#include <audioapi/events/AudioEventPayload.h>
 #include <gtest/gtest.h>
+#include <test/src/MockAudioEventHandlerRegistry.h>
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 using namespace audioapi;
@@ -27,14 +32,42 @@ namespace {
 
 class FakeAudioRecorder : public AudioRecorder {
  public:
-  FakeAudioRecorder() : AudioRecorder(nullptr) {}
+  explicit FakeAudioRecorder(
+      const std::shared_ptr<IAudioEventHandlerRegistry> &audioEventHandlerRegistry = nullptr)
+      : AudioRecorder(audioEventHandlerRegistry) {}
+
+  static constexpr float kSampleRate = 48000.0F;
+  static constexpr size_t kFramesPerBuffer = 128;
 
   std::vector<std::string> stopPaths{"file:///tmp/recording.m4a"};
   std::atomic<int> stopCount{0};
 
+  // Mirrors AndroidAudioRecorder: the id is published before the stream starts and
+  // cleared when the start fails or the session stops.
+  int32_t streamSessionId = 0;
+  bool failStart = false;
+  std::function<void()> onStreamStarting;
+  std::thread::id *destroyedOn = nullptr;
+
+  ~FakeAudioRecorder() override {
+    if (destroyedOn != nullptr) {
+      *destroyedOn = std::this_thread::get_id();
+    }
+  }
+
+  using AudioRecorder::publishAudioSessionId;
+
   Result<NoneType, std::string> start() override {
     if (state_ != RecorderState::Idle) {
       return Err(std::string("Recorder is already recording"));
+    }
+    publishAudioSessionId(streamSessionId);
+    if (onStreamStarting) {
+      onStreamStarting();
+    }
+    if (failStart) {
+      publishAudioSessionId(0);
+      return Err(std::string("Failed to start stream"));
     }
     state_ = RecorderState::Recording;
     return Ok(None);
@@ -46,22 +79,36 @@ class FakeAudioRecorder : public AudioRecorder {
     if (state_.exchange(RecorderState::Idle) == RecorderState::Idle) {
       return Err(std::string("Recorder is not in recording state."));
     }
+    publishAudioSessionId(0);
     stopCount += 1;
     return Ok(FileInfo{.paths = stopPaths, .size = 1.5, .duration = 10.0});
   }
 
+  // Mirrors the platform recorders: pause() and resume() go through the shared state
+  // transitions, and isRecording() also requires a live input stream, which a restart
+  // (Android) or an interruption (iOS) takes away.
+  bool streamDown = false;
+
   void pause() override {
-    state_ = RecorderState::Paused;
+    markPaused();
   }
   void resume() override {
-    state_ = RecorderState::Recording;
+    markResumed();
   }
   Result<NoneType, std::string> rerouteInput() override {
     return Result<NoneType, std::string>::Ok(None);
   }
 
+  /// Stands in for the platform input callback (Oboe's onAudioReady, the iOS receiver block),
+  /// which keeps delivering whenever the stream is up, paused or not.
+  void deliverInput(const float *const *channels, int numFrames) {
+    if (!streamDown) {
+      onAudioFrames(channels, numFrames);
+    }
+  }
+
   bool isRecording() const override {
-    return state_ == RecorderState::Recording;
+    return state_ == RecorderState::Recording && !streamDown;
   }
   bool isPaused() const override {
     return state_ == RecorderState::Paused;
@@ -76,9 +123,49 @@ class FakeAudioRecorder : public AudioRecorder {
 
  protected:
   [[nodiscard]] Result<StreamFormat, std::string> resolveStreamFormat() const override {
-    return Ok(StreamFormat{});
+    return Ok(
+        StreamFormat{
+            .layout = AudioLayout{.sampleRate = kSampleRate, .channelCount = 1},
+            .maxFramesPerBuffer = kFramesPerBuffer,
+        });
   }
 };
+
+/// Counts the frames an onAudioReady callback receives while @p feed runs. The callback is
+/// registered on a live session and cleared afterwards, which drains its worker and flushes
+/// whatever it buffered, so every frame that got through has been counted on return.
+template <typename Feed>
+int framesDeliveredToCallback(
+    MockAudioEventHandlerRegistry &registry,
+    FakeAudioRecorder &recorder,
+    Feed &&feed) {
+  constexpr uint64_t kCallbackId = 7;
+  std::atomic<int> deliveredFrames{0};
+  ON_CALL(registry, dispatchEvent(AudioEvent::AUDIO_READY, kCallbackId, testing::_))
+      .WillByDefault([&](AudioEvent, uint64_t, AudioEventPayload &&payload) {
+        deliveredFrames += std::get<AudioReadyPayload>(payload).numFrames;
+        return true;
+      });
+
+  EXPECT_TRUE(
+      recorder
+          .setOnAudioReadyCallback(
+              FakeAudioRecorder::kSampleRate, FakeAudioRecorder::kFramesPerBuffer, 1, kCallbackId)
+          .is_ok());
+  feed();
+  recorder.clearOnAudioReadyCallback();
+  return deliveredFrames.load();
+}
+
+/// One full input buffer through the platform input callback.
+void deliverOneBuffer(FakeAudioRecorder &recorder) {
+  std::vector<float> samples(FakeAudioRecorder::kFramesPerBuffer, 0.5F);
+  const float *channels[] = {samples.data()};
+  recorder.deliverInput(channels, static_cast<int>(samples.size()));
+}
+
+using NiceRegistry = testing::NiceMock<MockAudioEventHandlerRegistry>;
+constexpr int kOneBuffer = static_cast<int>(FakeAudioRecorder::kFramesPerBuffer);
 
 } // namespace
 
@@ -155,6 +242,81 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeWithExpectedIgnoreForeignRecorder) 
 
   EXPECT_EQ(handle.resume(current), RecorderState::Recording);
   EXPECT_TRUE(current->isRecording());
+}
+
+TEST(ActiveRecorderHandleTest, PauseAndResumeReachARecorderWhoseStreamIsDown) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  recorder->streamDown = true;
+
+  EXPECT_EQ(handle.pause(), RecorderState::Paused);
+  EXPECT_EQ(handle.resume(), RecorderState::Recording);
+}
+
+TEST(AudioRecorderPauseTest, PauseLeavesAnIdleOrPausedRecorderUnchanged) {
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+
+  recorder->pause();
+  EXPECT_EQ(recorder->getState(), RecorderState::Idle);
+  recorder->resume();
+  EXPECT_EQ(recorder->getState(), RecorderState::Idle);
+
+  ASSERT_TRUE(recorder->start().is_ok());
+  recorder->pause();
+  recorder->pause();
+  EXPECT_EQ(recorder->getState(), RecorderState::Paused);
+}
+
+TEST(AudioRecorderPauseTest, InputIsDeliveredOnlyWhileRecording) {
+  auto registry = std::make_shared<NiceRegistry>();
+  auto recorder = std::make_shared<FakeAudioRecorder>(registry);
+  ASSERT_TRUE(recorder->start().is_ok());
+
+  EXPECT_EQ(
+      framesDeliveredToCallback(*registry, *recorder, [&] { deliverOneBuffer(*recorder); }),
+      kOneBuffer);
+
+  recorder->pause();
+  EXPECT_EQ(
+      framesDeliveredToCallback(*registry, *recorder, [&] { deliverOneBuffer(*recorder); }), 0);
+}
+
+TEST(AudioRecorderPauseTest, PauseMadeWhileTheStreamIsDownHoldsWhenInputReturns) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto registry = std::make_shared<NiceRegistry>();
+  auto recorder = std::make_shared<FakeAudioRecorder>(registry);
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+
+  const int delivered = framesDeliveredToCallback(*registry, *recorder, [&] {
+    recorder->streamDown = true;
+    EXPECT_EQ(handle.pause(), RecorderState::Paused);
+    recorder->streamDown = false;
+    deliverOneBuffer(*recorder);
+  });
+
+  EXPECT_EQ(delivered, 0);
+  EXPECT_EQ(handle.currentState(), RecorderState::Paused);
+}
+
+TEST(AudioRecorderPauseTest, ResumeAfterAPauseMadeWhileTheStreamWasDownDeliversInputAgain) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto registry = std::make_shared<NiceRegistry>();
+  auto recorder = std::make_shared<FakeAudioRecorder>(registry);
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  recorder->streamDown = true;
+  ASSERT_EQ(handle.pause(), RecorderState::Paused);
+  recorder->streamDown = false;
+
+  const int delivered = framesDeliveredToCallback(*registry, *recorder, [&] {
+    EXPECT_EQ(handle.resume(), RecorderState::Recording);
+    deliverOneBuffer(*recorder);
+  });
+
+  EXPECT_EQ(delivered, kOneBuffer);
 }
 
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {
@@ -278,6 +440,77 @@ TEST(ActiveRecorderHandleTest, TryStartSucceedsWhenPreviousRecorderExpired) {
   ASSERT_TRUE(handle.tryStart(successor).is_ok());
 }
 
+TEST(ActiveRecorderHandleTest, SessionIdIsReadableWhileTryStartIsStarting) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  recorder->streamSessionId = 42;
+  int32_t idSeenWhileStarting = 0;
+  // The slot is assigned only after start() returns; an observer reacting to the stream
+  // starting must already find its id.
+  recorder->onStreamStarting = [&] {
+    idSeenWhileStarting = handle.audioSessionId();
+  };
+
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  EXPECT_EQ(idSeenWhileStarting, 42);
+  EXPECT_EQ(handle.audioSessionId(), 42);
+
+  ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
+  EXPECT_EQ(handle.audioSessionId(), 0);
+}
+
+TEST(ActiveRecorderHandleTest, SessionIdReadDoesNotWaitOnTheHandleMutex) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  recorder->streamSessionId = 7;
+  int32_t idSeenFromAnotherThread = 0;
+  // tryStart() holds the handle mutex across start(); a reader on another thread (the
+  // Android main looper) must not block on it.
+  recorder->onStreamStarting = [&] {
+    std::thread reader([&] { idSeenFromAnotherThread = handle.audioSessionId(); });
+    reader.join();
+  };
+
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  EXPECT_EQ(idSeenFromAnotherThread, 7);
+}
+
+TEST(ActiveRecorderHandleTest, FailedTryStartRestoresThePreviousSessionSource) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto current = std::make_shared<FakeAudioRecorder>();
+  current->streamSessionId = 5;
+  ASSERT_TRUE(handle.tryStart(current).is_ok());
+  current->stop();
+
+  auto failing = std::make_shared<FakeAudioRecorder>();
+  failing->streamSessionId = 9;
+  failing->failStart = true;
+  ASSERT_TRUE(handle.tryStart(failing).is_err());
+  // A failed candidate that still reports an id must not stay the source.
+  failing->publishAudioSessionId(9);
+  EXPECT_EQ(handle.audioSessionId(), 0);
+
+  current->streamSessionId = 6;
+  ASSERT_TRUE(handle.tryStart(current).is_ok());
+  EXPECT_EQ(handle.audioSessionId(), 6);
+}
+
+TEST(ActiveRecorderHandleTest, ExpiredRecorderReportsNoSessionId) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  {
+    auto expired = std::make_shared<FakeAudioRecorder>();
+    expired->streamSessionId = 3;
+    ASSERT_TRUE(handle.tryStart(expired).is_ok());
+    EXPECT_EQ(handle.audioSessionId(), 3);
+  }
+
+  EXPECT_EQ(handle.audioSessionId(), 0);
+}
+
 // Thread startup skew usually serializes a single two-thread run, so the race
 // tests below repeat with a fresh handle/recorder and release both threads at
 // once through an atomic start flag to actually hit concurrent interleavings.
@@ -358,6 +591,39 @@ TEST(ActiveRecorderHandleTest, ConcurrentTryStartAdmitsOnlyOneRecorder) {
     trySecond.join();
 
     EXPECT_EQ(successes.load(), 1) << "iteration " << iteration;
+  }
+}
+
+TEST(ActiveRecorderHandleTest, SessionIdReadNeverRunsTheRecorderDestructor) {
+  // The Android main thread polls the id; if a read owned the recorder while JS dropped its
+  // last reference, the recorder's stop and stream close would run on that thread.
+  for (int iteration = 0; iteration < RACE_TEST_ITERATIONS; ++iteration) {
+    auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+    ActiveRecorderHandle &handle = *handleOwner;
+    std::thread::id destroyedOn;
+    auto recorder = std::make_shared<FakeAudioRecorder>();
+    recorder->streamSessionId = 4;
+    recorder->destroyedOn = &destroyedOn;
+    ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+
+    std::atomic<bool> reading{true};
+    std::atomic<bool> readerStarted{false};
+    std::thread reader([&] {
+      while (reading.load()) {
+        std::ignore = handle.audioSessionId();
+        readerStarted.store(true);
+      }
+    });
+    while (!readerStarted.load()) {
+      std::this_thread::yield();
+    }
+
+    recorder.reset();
+    reading.store(false);
+    reader.join();
+
+    EXPECT_EQ(destroyedOn, std::this_thread::get_id());
+    EXPECT_EQ(handle.audioSessionId(), 0);
   }
 }
 

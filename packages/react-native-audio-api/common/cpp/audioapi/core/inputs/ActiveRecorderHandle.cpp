@@ -2,6 +2,8 @@
 
 #include <audioapi/core/inputs/AudioRecorder.h>
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -27,9 +29,14 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
     return Result<NoneType, std::string>::Err("Another recording is already in progress");
   }
 
+  // The candidate is the session source before start() so the id it publishes while starting
+  // is already readable; the slot itself is assigned only once start() succeeds.
+  setSessionSource(recorder);
   auto result = recorder->start();
   if (result.is_ok()) {
     recorder_ = recorder;
+  } else {
+    setSessionSource(prevRecorder);
   }
   return result;
 }
@@ -37,6 +44,23 @@ Result<NoneType, std::string> ActiveRecorderHandle::tryStart(
 void ActiveRecorderHandle::clearRecorder() {
   std::scoped_lock lock(mutex_);
   recorder_.reset();
+  setSessionSource(nullptr);
+}
+
+void ActiveRecorderHandle::setSessionSource(const std::shared_ptr<AudioRecorder> &recorder) {
+  auto source =
+      recorder ? recorder->audioSessionIdSource() : std::weak_ptr<const std::atomic<int32_t>>{};
+  std::scoped_lock lock(sessionSourceMutex_);
+  sessionSource_ = std::move(source);
+}
+
+int32_t ActiveRecorderHandle::audioSessionId() const {
+  std::shared_ptr<const std::atomic<int32_t>> sessionId;
+  {
+    std::scoped_lock lock(sessionSourceMutex_);
+    sessionId = sessionSource_.lock();
+  }
+  return sessionId ? sessionId->load(std::memory_order_acquire) : 0;
 }
 
 RecorderState ActiveRecorderHandle::currentState() const {
@@ -52,7 +76,7 @@ bool ActiveRecorderHandle::isRecordingOngoing() const {
 RecorderState ActiveRecorderHandle::pause() {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();
-  if (recorder && recorder->isRecording()) {
+  if (recorder) {
     recorder->pause();
   }
   return stateOf(recorder);
@@ -69,7 +93,7 @@ RecorderState ActiveRecorderHandle::pause(const std::shared_ptr<AudioRecorder> &
 RecorderState ActiveRecorderHandle::resume() {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();
-  if (recorder && recorder->isPaused()) {
+  if (recorder) {
     recorder->resume();
   }
   return stateOf(recorder);

@@ -4,6 +4,8 @@
 #include <audioapi/core/inputs/RecorderState.h>
 #include <audioapi/utils/Macros.h>
 #include <audioapi/utils/Result.hpp>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,11 +34,18 @@ class ActiveRecorderHandle {
   /// @brief The state of the recorder in the slot, or Idle when the slot is empty.
   [[nodiscard]] RecorderState currentState() const;
 
+  /// @brief The id in the AudioRecorder::audioSessionIdSource() cell of the occupant, or of the
+  /// recorder tryStart() is starting, so an observer can match the stream before start()
+  /// returns; 0 when there is neither. Never waits on a start or stop in progress and never owns the recorder, so its
+  /// last reference cannot be dropped here; safe on a UI thread.
+  [[nodiscard]] int32_t audioSessionId() const;
+
   /// @brief True while a recording session is active; a paused recording counts as
   /// ongoing because it still owns an open output file.
   [[nodiscard]] bool isRecordingOngoing() const;
 
-  /// @brief Pauses an actively recording session; a no-op in any other state.
+  /// @brief Pauses a recording session, including one whose input stream is down; a no-op in
+  /// any other state.
   RecorderState pause();
 
   /// @brief pause() if the slot holds @p expected; otherwise leaves the occupant alone and
@@ -79,9 +88,16 @@ class ActiveRecorderHandle {
   /// @brief Drops the slot without stopping the recorder.
   void clearRecorder();
 
+  void setSessionSource(const std::shared_ptr<AudioRecorder> &recorder);
+
   mutable std::recursive_mutex mutex_;
   std::weak_ptr<AudioRecorder> recorder_;
   std::optional<FileInfo> lastResult_;
+
+  /// AudioRecorder::audioSessionIdSource() of the occupant, or of the recorder tryStart() is
+  /// starting. A leaf lock: nothing else is taken or called while it is held.
+  mutable std::mutex sessionSourceMutex_;
+  std::weak_ptr<const std::atomic<int32_t>> sessionSource_;
 };
 
 } // namespace audioapi

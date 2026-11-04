@@ -55,6 +55,7 @@ class CentralizedForegroundService : Service() {
       ACTION_STOP -> {
         if (stopSelfResult(startId)) {
           explicitStop = true
+          ForegroundServiceManager.onServiceLeftForeground()
           stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
           Log.d(TAG, "Stop superseded by a newer start request, service stays in the foreground")
@@ -86,7 +87,10 @@ class CentralizedForegroundService : Service() {
       }
 
       val (notificationId, notification) = existingNotification
-      startForegroundCompat(notificationId, notification)
+      val subscribers = ForegroundServiceManager.currentSubscribers()
+      val requestedTypes = subscribers.fold(0) { types, subscriber -> types or subscriber.foregroundServiceType() }
+      val heldTypes = startForegroundCompat(notificationId, notification, requestedTypes)
+      ForegroundServiceManager.onServiceForegrounded(subscribers, heldTypes)
 
       Log.d(TAG, "Centralized foreground service started with notification ID: $notificationId")
     } catch (e: Exception) {
@@ -110,7 +114,7 @@ class CentralizedForegroundService : Service() {
         .build()
 
     try {
-      startForegroundCompat(PLACEHOLDER_NOTIFICATION_ID, placeholderNotification)
+      startForegroundCompat(PLACEHOLDER_NOTIFICATION_ID, placeholderNotification, requestedTypes = 0)
     } finally {
       // The service must exit even when startForeground throws (e.g. API 34+
       // ForegroundServiceStartNotAllowedException) — otherwise the system kills the
@@ -118,24 +122,32 @@ class CentralizedForegroundService : Service() {
       // exit is unconditional, because there is nothing to keep in the foreground; a start
       // racing it is picked up again by ForegroundServiceManager.onServiceDestroyed.
       explicitStop = true
+      ForegroundServiceManager.onServiceLeftForeground()
       stopForeground(STOP_FOREGROUND_REMOVE)
       stopSelf()
     }
   }
 
+  /**
+   * Starts the foreground with the [requestedTypes] the manifest declares and returns the service
+   * types the service then holds (0 below API 29, where services have none).
+   */
   private fun startForegroundCompat(
     notificationId: Int,
     notification: Notification,
-  ) {
+    requestedTypes: Int,
+  ): Int {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       startForeground(notificationId, notification)
-      return
+      return 0
     }
 
-    val serviceTypes = activeNotificationServiceTypes() and manifestDeclaredServiceTypes()
+    val declaredTypes = manifestDeclaredServiceTypes()
+    val serviceTypes = requestedTypes and declaredTypes
     when {
       serviceTypes != 0 -> {
         startForeground(notificationId, notification, serviceTypes)
+        return serviceTypes
       }
 
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
@@ -146,23 +158,7 @@ class CentralizedForegroundService : Service() {
         startForeground(notificationId, notification)
       }
     }
-  }
-
-  @RequiresApi(Build.VERSION_CODES.Q)
-  private fun activeNotificationServiceTypes(): Int {
-    var serviceTypes = 0
-
-    if (NotificationRegistry.getBuiltNotification(PlaybackNotification.ID) != null) {
-      serviceTypes = serviceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-    }
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-      NotificationRegistry.getBuiltNotification(RecordingNotification.ID) != null
-    ) {
-      serviceTypes = serviceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    }
-
-    return serviceTypes
+    return declaredTypes
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)

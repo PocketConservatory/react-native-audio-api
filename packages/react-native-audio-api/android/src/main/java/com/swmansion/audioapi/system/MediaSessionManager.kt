@@ -37,6 +37,7 @@ object MediaSessionManager {
 
   private lateinit var audioManager: AudioManager
   private lateinit var audioFocusListener: AudioFocusListener
+  private lateinit var recordingSilenceListener: RecordingSilenceListener
   private lateinit var volumeChangeListener: VolumeChangeListener
   private lateinit var deviceChangeListener: DeviceChangeListener
   private lateinit var playbackNotificationReceiver: PlaybackNotificationReceiver
@@ -93,6 +94,8 @@ object MediaSessionManager {
       AudioFocusListener(WeakReference(this.audioManager), this.audioAPIModule, mainHandler) {
         communicationSession.isActive
       }
+    this.recordingSilenceListener =
+      RecordingSilenceListener(WeakReference(this.audioManager), this.audioAPIModule, mainHandler)
     this.communicationSession =
       CommunicationSession(this.audioManager, this.audioFocusListener, mainHandler, ::emitRouteChange)
     this.volumeChangeListener = VolumeChangeListener(WeakReference(this.audioManager), this.audioAPIModule)
@@ -159,6 +162,18 @@ object MediaSessionManager {
     }
   }
 
+  /**
+   * Unlike [observeAudioInterruptions] this also works during a communication session: it holds
+   * no focus, so it does not compete with the session's own.
+   */
+  fun observeRecordingInterruptions(enabled: Boolean) {
+    runOnMain {
+      recordingSilenceListener.setEnabled(enabled)
+    }
+  }
+
+  fun isRecordingSilenced(): Boolean = recordingSilenceListener.isRecordingSilenced()
+
   fun setCommunicationDevice(
     device: String,
     onComplete: (String?) -> Unit,
@@ -176,7 +191,11 @@ object MediaSessionManager {
   }
 
   fun cleanup() {
+    // Captured now: a reload can initialize a new listener before the posted release runs.
+    val silenceListener = if (::recordingSilenceListener.isInitialized) recordingSilenceListener else null
     runOnMain {
+      silenceListener?.release()
+
       if (::communicationSession.isInitialized) {
         communicationSession.deactivate()
       }
@@ -436,4 +455,7 @@ object MediaSessionManager {
   }
 
   fun isNotificationActive(key: String): Boolean = notificationRegistry.isNotificationActive(key)
+
+  fun isNotificationServiceRunning(key: String): Boolean =
+    ::notificationRegistry.isInitialized && notificationRegistry.isServiceRunning(key)
 }

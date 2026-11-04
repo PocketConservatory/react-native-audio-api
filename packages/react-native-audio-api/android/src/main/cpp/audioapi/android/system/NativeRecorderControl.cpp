@@ -19,6 +19,7 @@ void NativeRecorderControl::registerNatives() {
       makeNativeMethod("pauseActiveRecording", NativeRecorderControl::pauseActiveRecording),
       makeNativeMethod("resumeActiveRecording", NativeRecorderControl::resumeActiveRecording),
       makeNativeMethod("currentRecorderState", NativeRecorderControl::currentRecorderState),
+      makeNativeMethod("activeAudioSessionId", NativeRecorderControl::activeAudioSessionId),
   });
 }
 
@@ -36,6 +37,10 @@ jint NativeRecorderControl::resumeActiveRecording(jni::alias_ref<jni::JClass> /*
 
 jint NativeRecorderControl::currentRecorderState(jni::alias_ref<jni::JClass> /*clazz*/) {
   return toOrdinal(ActiveRecorderHandle::global().currentState());
+}
+
+jint NativeRecorderControl::activeAudioSessionId(jni::alias_ref<jni::JClass> /*clazz*/) {
+  return ActiveRecorderHandle::global().audioSessionId();
 }
 
 } // namespace audioapi

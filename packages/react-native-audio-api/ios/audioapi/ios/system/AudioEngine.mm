@@ -21,6 +21,8 @@
 @property (nonatomic, copy) AVAudioSinkNodeReceiverBlock receiverBlock;
 @property (nonatomic, assign) BOOL voiceProcessingEnabled;
 @property (nonatomic, copy) void (^onInputNotification)(AudioEngineInputNotification);
+/// Set by `pauseInput`, cleared by `resumeInput`. See `hasLiveInput`.
+@property (nonatomic, assign) BOOL inputPaused;
 
 @end
 
@@ -43,6 +45,7 @@
 - (void)createAudioEngineIfNeeded;
 - (void)destroyAudioEnginePreservingSessionDeactivationState:(BOOL)preserveSessionDeactivationState;
 - (BOOL)hasInput;
+- (BOOL)hasLiveInput;
 - (BOOL)hasSources;
 - (BOOL)hasTrackedGraph;
 - (AVAudioFormat *)currentInputConnectionFormat;
@@ -58,6 +61,8 @@
 - (void)rebuildGraphForCurrentHardware;
 - (void)settleStateAfterFailedStart;
 - (void)resumeAfterRebuild;
+- (bool)startIfNecessaryLocked;
+- (void)markInputPausedLocked;
 - (dispatch_block_t)inputNotificationBlock:(AudioEngineInputNotification)notification;
 - (AudioEngineInterruptionEndOutcome)rebuildAfterInterruption:(bool)shouldResume
                                                  readyToStart:(BOOL *)readyToStart;
@@ -86,6 +91,18 @@ static AudioEngine *_sharedInstance = nil;
 - (BOOL)hasInput
 {
   return self.inputRegistration != nil;
+}
+
+/// @brief An input registered and not paused by its recorder.
+/// @discussion A paused input stays registered (it still keeps the graph tracked) but is not
+/// part of the live graph: the engine neither materializes it, nor reads its format, nor
+/// engages voice processing for it, nor notifies it. Reading `AVAudioEngine.inputNode` alone
+/// turns the microphone on, so starting the engine for other consumers must not touch it.
+/// Every transition to paused goes through `markInputPausedLocked`, so no engine that read
+/// `inputNode` while the input was live outlives the pause.
+- (BOOL)hasLiveInput
+{
+  return [self hasInput] && !self.inputRegistration.inputPaused;
 }
 
 - (BOOL)hasSources
@@ -216,7 +233,7 @@ static AudioEngine *_sharedInstance = nil;
 /// @brief The input node's current output format, or nil when unusable. Lock held.
 - (AVAudioFormat *)liveInputFormat
 {
-  if (self.audioEngine == nil) {
+  if (self.audioEngine == nil || self.inputRegistration.inputPaused) {
     return nil;
   }
 
@@ -248,7 +265,7 @@ static AudioEngine *_sharedInstance = nil;
 
 - (BOOL)materializeInputNodeIfNeeded
 {
-  if (self.inputRegistration == nil) {
+  if (![self hasLiveInput]) {
     return YES;
   }
 
@@ -303,7 +320,9 @@ static AudioEngine *_sharedInstance = nil;
 // so this has to run before the input connection format is read.
 - (void)applyVoiceProcessing
 {
-  BOOL wantsVoiceProcessing = self.inputRegistration.voiceProcessingEnabled;
+  // A paused input wants no voice processing: the voice-processing I/O unit captures
+  // as well, so engaging it would turn the microphone on for playback alone.
+  BOOL wantsVoiceProcessing = [self hasLiveInput] && self.inputRegistration.voiceProcessingEnabled;
 
   // A freshly created engine has voice processing off, so for playback-only
   // graphs there is nothing to undo - and reading `inputNode` would needlessly
@@ -447,6 +466,85 @@ static AudioEngine *_sharedInstance = nil;
   return [self liveInputFormat];
 }
 
+- (void)pauseInput
+{
+  std::scoped_lock lock(_engineLock);
+  AudioEngineInputRegistration *registration = self.inputRegistration;
+
+  if (registration == nil || registration.inputPaused) {
+    return;
+  }
+
+  [self markInputPausedLocked];
+
+  if (self.state != AudioEngineState::AudioEngineStateRunning) {
+    return;
+  }
+
+  if (![self hasSources]) {
+    self.state = AudioEngineState::AudioEngineStatePaused;
+    return;
+  }
+
+  [self rebuildGraphForCurrentHardware];
+  [self resumeAfterRebuild];
+}
+
+/// @brief Marks the input paused and drops the engine built while it was live. Lock held.
+/// @discussion That engine read `inputNode` and may have engaged voice processing for it, and
+/// a paused input must not leave either behind (see `hasLiveInput`). A running engine that
+/// plays sources is kept for the caller to rebuild without the input; any other engine is
+/// destroyed, which marks the tracked graph for rebuild, so the next start builds it without
+/// the input. The engine state is left to the caller.
+- (void)markInputPausedLocked
+{
+  self.inputRegistration.inputPaused = YES;
+
+  if (self.state == AudioEngineState::AudioEngineStateRunning && [self hasSources]) {
+    return;
+  }
+
+  [self destroyAudioEnginePreservingSessionDeactivationState:YES];
+}
+
+- (bool)resumeInput
+{
+  std::scoped_lock lock(_engineLock);
+  AudioEngineInputRegistration *registration = self.inputRegistration;
+
+  if (registration == nil) {
+    return false;
+  }
+
+  const BOOL wasPaused = registration.inputPaused;
+  BOOL stoppedPlayback = NO;
+
+  if (wasPaused) {
+    registration.inputPaused = NO;
+    self.graphNeedsRebuild = true;
+
+    // A running engine plays sources through a graph built without the input.
+    if (self.state == AudioEngineState::AudioEngineStateRunning) {
+      stoppedPlayback = [self hasSources];
+      [self stopEngine];
+    }
+  }
+
+  if ([self startIfNecessaryLocked]) {
+    return true;
+  }
+
+  if (wasPaused) {
+    [self markInputPausedLocked];
+  }
+
+  if (stoppedPlayback) {
+    [self notifyOutputRecoveryFailed];
+  }
+
+  return false;
+}
+
 - (bool)onInterruptionBegin
 {
   std::scoped_lock lock(_engineLock);
@@ -511,12 +609,13 @@ static AudioEngine *_sharedInstance = nil;
 // According to <https://developer.apple.com/documentation/avfaudio/avaudiosession/interruptionoptions/shouldresume>:
 // * `shouldResume` only refers to resuming the playback.
 // * We choose to resume recording unconditionally (but see below).
+// * A paused input is not recording (see hasLiveInput), so it counts as no input.
 // Below decision tree reflects this policy.
 // On the long term it would be useful to make this policy configurable.
 static BOOL
-shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BOOL hasSources)
+shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput, BOOL hasSources)
 {
-  if (hasInput) {
+  if (hasLiveInput) {
     if (hasSources) {
       if (shouldPlaybackResume) {
         // Resume recording and playback.
@@ -542,10 +641,13 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   AudioEngineInterruptionEndOutcome outcome;
   BOOL readyToStart = NO;
   dispatch_block_t notifyInput = nil;
+  // Strong: a dropped engine must not compare equal to a nil current one.
+  AVAudioEngine *rebuiltEngine = nil;
 
   {
     std::scoped_lock lock(_engineLock);
     outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
+    rebuiltEngine = self.audioEngine;
 
     if (outcome == AudioEngineInterruptionEndOutcomePaused || readyToStart) {
       notifyInput = [self inputNotificationBlock:AudioEngineInputNotificationHardwareChanged];
@@ -562,6 +664,21 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   }
 
   std::scoped_lock lock(_engineLock);
+
+  // Only the engine rebuilt above may be started. If it was dropped or replaced while the lock
+  // was released (a pauseInput, an attach that created a partial engine, a restartAudioEngine,
+  // a failed start) and the state is still Interrupted, decide again under this lock. An engine
+  // that left Interrupted meanwhile (a start that succeeded) is settled by
+  // startAfterInterruption.
+  if (self.audioEngine != rebuiltEngine &&
+      self.state == AudioEngineState::AudioEngineStateInterrupted) {
+    outcome = [self rebuildAfterInterruption:shouldResume readyToStart:&readyToStart];
+
+    if (!readyToStart) {
+      return outcome;
+    }
+  }
+
   return [self startAfterInterruption];
 }
 
@@ -580,7 +697,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   }
 
   const BOOL resumeEngine =
-      shouldEngineResumeAfterInterruption(shouldResume, [self hasInput], [self hasSources]);
+      shouldEngineResumeAfterInterruption(shouldResume, [self hasLiveInput], [self hasSources]);
 
   if (!resumeEngine) {
     [self stopEngine];
@@ -597,7 +714,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   [self stopEngine];
   [self rebuildAudioEngine];
 
-  if (self.inputRegistration != nil && self.inputNode == nil) {
+  if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(
         @"Error while materializing the audio input node after interruption: missing live input format");
     self.state = AudioEngineState::AudioEngineStateInterrupted;
@@ -610,8 +727,9 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   return AudioEngineInterruptionEndOutcomeStillInterrupted;
 }
 
-/// @brief Starts the engine rebuilt by rebuildAfterInterruption:, unless it was stopped or
-/// started meanwhile. Lock held.
+/// @brief Starts the current engine, unless it was stopped or started meanwhile. Lock held.
+/// @discussion The caller makes sure the current engine is the one rebuildAfterInterruption:
+/// just built, never one created or replaced while the lock was released.
 - (AudioEngineInterruptionEndOutcome)startAfterInterruption
 {
   if (self.state == AudioEngineState::AudioEngineStateRunning && [self.audioEngine isRunning]) {
@@ -645,7 +763,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
 {
   void (^handler)(AudioEngineInputNotification) = self.inputRegistration.onInputNotification;
 
-  if (handler == nil) {
+  if (handler == nil || ![self hasLiveInput]) {
     return nil;
   }
 
@@ -753,7 +871,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
   // Never rebuilds; callers check `mustRebuildBeforeStart` first.
   [self materializeTrackedNodesIfNeeded];
 
-  if (self.inputRegistration != nil && self.inputNode == nil) {
+  if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(@"Error while materializing the audio input node: missing live input format");
     return false;
   }
@@ -787,6 +905,12 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
 - (bool)startIfNecessary
 {
   std::scoped_lock lock(_engineLock);
+  return [self startIfNecessaryLocked];
+}
+
+/// @brief `startIfNecessary` for callers already holding `_engineLock`, which is not recursive.
+- (bool)startIfNecessaryLocked
+{
   if (self.state == AudioEngineState::AudioEngineStateRunning && self.audioEngine != nil &&
       [self.audioEngine isRunning]) {
     [self materializeTrackedNodesIfNeeded];
@@ -807,20 +931,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasInput, BO
 
   [self settleStateAfterFailedStart];
   return false;
-}
-
-- (void)pauseIfNecessary
-{
-  std::scoped_lock lock(_engineLock);
-  if (self.state == AudioEngineState::AudioEngineStatePaused) {
-    return;
-  }
-
-  if (self.audioEngine != nil) {
-    [self.audioEngine pause];
-  }
-
-  self.state = AudioEngineState::AudioEngineStatePaused;
 }
 
 - (void)stopIfNecessary

@@ -9,6 +9,8 @@
 #import <audioapi/core/sources/RecorderAdapterNode.h>
 #import <audioapi/core/utils/AudioFileWriter.h>
 #import <audioapi/core/utils/graph/NodeHandle.h>
+#import <audioapi/events/AudioEventProducer.h>
+#import <audioapi/events/IAudioEventHandlerRegistry.h>
 #import <audioapi/ios/core/NativeAudioRecorder.h>
 #import <audioapi/ios/system/AudioEngine.h>
 #import <audioapi/ios/system/AudioSessionManager.h>
@@ -31,6 +33,39 @@ static NSString *NSStringFromStdString(const std::string &value) {
 
 namespace audioapi {
 
+/// A context needs a registry to build its event producer; nothing here
+/// dispatches events, so every other call is a no-op.
+class FakeAudioEventHandlerRegistry : public IAudioEventHandlerRegistry {
+public:
+  uint64_t registerHandler(
+      AudioEvent eventName,
+      const std::shared_ptr<facebook::jsi::Function> &handler) override {
+    return 0;
+  }
+
+  void unregisterHandler(AudioEvent eventName, uint64_t listenerId) override {}
+
+  bool dispatchEvent(AudioEvent eventName, uint64_t listenerId,
+                     AudioEventPayload &&payload) noexcept override {
+    return false;
+  }
+
+  std::shared_ptr<AudioEventProducer> createAudioEventProducer() override {
+    return std::make_shared<AudioEventProducer>(producerQueue_);
+  }
+
+  bool
+  dispatchEventFromAudioThread(AudioEventProducer &producer,
+                               AudioEvent eventName, uint64_t listenerId,
+                               AudioEventPayload &&payload) noexcept override {
+    return false;
+  }
+
+private:
+  /// Only a binding target for the producers handed out above.
+  moodycamel::ConcurrentQueue<int> producerQueue_;
+};
+
 struct RecorderAdapterTestFixture {
   std::shared_ptr<OfflineAudioContext> context;
   std::shared_ptr<utils::graph::NodeHandle> handle;
@@ -42,8 +77,8 @@ struct RecorderAdapterTestFixture {
 
 static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
   RecorderAdapterTestFixture fixture;
-  fixture.context =
-      std::make_shared<OfflineAudioContext>(2, 512, 44100.0f, nullptr);
+  fixture.context = std::make_shared<OfflineAudioContext>(
+      2, 512, 44100.0f, std::make_shared<FakeAudioEventHandlerRegistry>());
   auto adapterNode = std::make_unique<RecorderAdapterNode>(fixture.context);
   fixture.handle =
       std::make_shared<utils::graph::NodeHandle>(0, std::move(adapterNode));
@@ -214,6 +249,8 @@ public:
       const std::shared_ptr<IAudioEventHandlerRegistry>
           &audioEventHandlerRegistry)
       : IOSAudioRecorder(audioEventHandlerRegistry) {}
+
+  using AudioRecorder::acceptsInput;
 
   NativeAudioRecorder *
   replaceNativeRecorder(NativeAudioRecorder *nativeRecorder) {
@@ -501,6 +538,42 @@ public:
 
   XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
   XCTAssertFalse(_recorder->isPaused());
+}
+
+- (void)testPauseWhileEngineInterruptedResumesOnRequest {
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateInterrupted;
+
+  _recorder->pause();
+
+  XCTAssertEqual(self.nativeRecorder.pauseCallCount, 1);
+  XCTAssertEqual(_recorder->getState(), RecorderState::Paused);
+  XCTAssertFalse(_recorder->acceptsInput());
+
+  self.nativeRecorder.resumeResult = NO;
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertFalse(_recorder->acceptsInput());
+
+  self.nativeRecorder.resumeResult = YES;
+  self.audioEngine.state = AudioEngineStateRunning;
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 2);
+  XCTAssertEqual(_recorder->getState(), RecorderState::Recording);
+  XCTAssertTrue(_recorder->acceptsInput());
+}
+
+- (void)testResumeRestartsInterruptedEngineOfRecordingSession {
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateInterrupted;
+  XCTAssertTrue(_recorder->isPaused());
+
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertTrue(_recorder->acceptsInput());
 }
 
 - (void)testResumeDoesNotStoreRecordingWhenNativeResumeFails {

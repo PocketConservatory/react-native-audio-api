@@ -78,6 +78,42 @@ class AudioManager implements IAudioManager {
     NativeAudioAPIModule.activelyReclaimSession(enabled);
   }
 
+  /**
+   * Observes interruptions of the active recording without requesting audio
+   * focus, so other apps can keep playing while the app records. Use it instead
+   * of {@link observeAudioInterruptions} for a recording that should run
+   * alongside other apps' playback.
+   *
+   * Android 10+ (API 29+) only; a no-op on iOS, web, and older Android
+   * versions. Events arrive as the `interruption` system event:
+   *
+   * - `began` (`shouldResume: false`) when the system silences the recorder's
+   *   capture (a call, the assistant, another recorder, the microphone privacy
+   *   toggle), including a recording that starts already silenced.
+   * - `ended` (`shouldResume: true`) once the capture is no longer silenced and
+   *   no call that started after `began` is still going.
+   *
+   * It also works during an Android communication session, where the session's
+   * audio focus reports interruptions too, so the same interruption can arrive
+   * from both.
+   *
+   * Calls are counted: each `true` needs a matching `false` before observation
+   * stops.
+   */
+  observeRecordingInterruptions(enabled: boolean) {
+    NativeAudioAPIModule.observeRecordingInterruptions(enabled);
+  }
+
+  /**
+   * Whether the active recording is capturing silence because of an
+   * interruption reported by {@link observeRecordingInterruptions}, and is
+   * tracked only while that observation is enabled. Always `false` on iOS, web,
+   * and Android below 10 (API 29).
+   */
+  isRecordingSilenced(): boolean {
+    return NativeAudioAPIModule.isRecordingSilenced();
+  }
+
   observeVolumeChanges(enabled: boolean) {
     NativeAudioAPIModule.observeVolumeChanges(enabled);
   }

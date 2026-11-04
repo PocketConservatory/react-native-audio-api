@@ -194,6 +194,14 @@ RCT_EXPORT_METHOD(activelyReclaimSession : (BOOL)enabled)
   [self.notificationManager activelyReclaimSession:enabled];
 }
 
+// Android only: iOS reports a lost microphone through observeAudioInterruptions.
+RCT_EXPORT_METHOD(observeRecordingInterruptions : (BOOL)enabled) {}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(isRecordingSilenced)
+{
+  return @NO;
+}
+
 RCT_EXPORT_METHOD(observeVolumeChanges : (BOOL)enabled)
 {
   [self.notificationManager observeVolumeChanges:(BOOL)enabled];
@@ -315,6 +323,13 @@ RCT_EXPORT_METHOD(
   [self.notificationRegistry
       isNotificationActiveWithKey:key
                        completion:^(BOOL isActive) { resolve(@(isActive)); }];
+}
+
+RCT_EXPORT_METHOD(
+    isNotificationServiceRunning : (NSString *)key resolve : (RCTPromiseResolveBlock)
+        resolve reject : (RCTPromiseRejectBlock)reject)
+{
+  resolve(@NO);
 }
 
 #ifdef RCT_NEW_ARCH_ENABLED

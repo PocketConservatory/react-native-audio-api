@@ -24,6 +24,12 @@ object ForegroundServiceManager {
   private var isServiceRunning = false
   private var startIntentSent = false
 
+  /**
+   * The subscribers whose [BaseNotification.foregroundServiceType] the service held when it last
+   * reached the foreground with a real notification. Empty once it leaves the foreground.
+   */
+  private var foregroundedSubscribers = emptySet<BaseNotification>()
+
   /** Set while a restart triggered by [onServiceDestroyed] is in flight, so a service that
    * never comes up cannot be restarted in a loop. */
   private var restartAfterDestroyPending = false
@@ -69,6 +75,41 @@ object ForegroundServiceManager {
   fun isServiceRunning(): Boolean = isServiceRunning
 
   /**
+   * Whether the service is in the foreground for [subscriber]: a startForeground that ran while it
+   * was subscribed succeeded with the service type it needs, and since then neither has the service
+   * left the foreground nor has the subscriber unsubscribed. Independent of whether its
+   * notification is visible.
+   */
+  @Synchronized
+  fun isForegroundFor(subscriber: BaseNotification): Boolean = subscriber in foregroundedSubscribers && subscriber in subscribers
+
+  @Synchronized
+  internal fun currentSubscribers(): Set<BaseNotification> = subscribers.toSet()
+
+  /**
+   * Called from [CentralizedForegroundService] after startForeground succeeded with a real
+   * notification. [requestedFor] is the [currentSubscribers] snapshot the request was built from,
+   * and [heldServiceTypes] the types the service was started with.
+   */
+  @Synchronized
+  internal fun onServiceForegrounded(
+    requestedFor: Set<BaseNotification>,
+    heldServiceTypes: Int,
+  ) {
+    foregroundedSubscribers =
+      requestedFor.filterTo(mutableSetOf()) {
+        val required = it.foregroundServiceType()
+        (required and heldServiceTypes) == required
+      }
+  }
+
+  /** Called from [CentralizedForegroundService] whenever it leaves the foreground. */
+  @Synchronized
+  internal fun onServiceLeftForeground() {
+    foregroundedSubscribers = emptySet()
+  }
+
+  /**
    * Called from [CentralizedForegroundService.onCreate].
    */
   @Synchronized
@@ -80,6 +121,7 @@ object ForegroundServiceManager {
   @Synchronized
   internal fun onServiceDestroyed() {
     isServiceRunning = false
+    foregroundedSubscribers = emptySet()
 
     val stillWanted = startIntentSent && subscribers.isNotEmpty() && !restartAfterDestroyPending
     // The instance is gone, so the previous request is spent either way: anything that
@@ -147,6 +189,7 @@ object ForegroundServiceManager {
   @Synchronized
   fun cleanup() {
     subscribers.clear()
+    foregroundedSubscribers = emptySet()
     stopServiceIfNotNeeded()
   }
 }

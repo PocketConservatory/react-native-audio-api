@@ -75,6 +75,12 @@ class AudioRecorder {
 
   [[nodiscard]] virtual double getInputLatency() const = 0;
 
+  /// @brief The cell holding the platform audio session id of the input stream this recorder is
+  /// starting or holds for an active session, or 0 when there is none or the platform has no such
+  /// id. Lock-free to read from any thread; the weak pointer lets a reader that must not own the
+  /// recorder read it.
+  [[nodiscard]] std::weak_ptr<const std::atomic<int32_t>> audioSessionIdSource() const;
+
  protected:
   /// @brief Lifecycle of one recorder output: the file writer, the JS callback, or the adapter
   /// node. Written on the JS thread under that output's mutex; the audio thread reads it
@@ -98,9 +104,23 @@ class AudioRecorder {
   };
 
   /// Audio thread. @p channels holds one pointer per stream channel, each to numFrames float32
-  /// samples, valid only for the call. Every consumer tryLocks its mutex and drops the buffer
-  /// rather than block.
+  /// samples, valid only for the call. Drops the buffer unless acceptsInput(). Every consumer
+  /// tryLocks its mutex and drops the buffer rather than block.
   void onAudioFrames(const float *const *channels, int numFrames);
+
+  /// @brief Moves a recording session to Paused, whatever the input stream is doing: a pause
+  /// made while the stream is down or restarting holds once input returns, because
+  /// onAudioFrames() writes only while acceptsInput(). Lock-free.
+  /// @returns Whether the session became paused; false for an idle or already paused recorder.
+  bool markPaused();
+
+  /// @brief Moves a paused session back to Recording; the counterpart of markPaused().
+  /// Lock-free.
+  /// @returns Whether the session resumed; false for an idle or recording recorder.
+  bool markResumed();
+
+  /// Whether captured input may reach the outputs: true only while a session is recording.
+  [[nodiscard]] bool acceptsInput() const;
 
   /// JS thread. Fails while the input is unavailable, which on iOS happens between a route
   /// change and the engine settling on the replacement format.
@@ -123,6 +143,9 @@ class AudioRecorder {
   /// until the next start(). Nothing may deliver frames in the old format once this runs.
   /// The caller must hold callbackMutex_, fileWriterMutex_ and adapterNodeMutex_.
   Result<NoneType, std::string> reprepareOutputs(const StreamFormat &format);
+
+  /// Publishes the id in the audioSessionIdSource() cell; 0 clears it.
+  void publishAudioSessionId(int32_t sessionId);
 
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
@@ -172,6 +195,10 @@ class AudioRecorder {
   std::atomic<float> streamSampleRate_{0.0F};
 
  private:
+  /// Shared so ActiveRecorderHandle can read the id without owning the recorder.
+  const std::shared_ptr<std::atomic<int32_t>> audioSessionId_ =
+      std::make_shared<std::atomic<int32_t>>(0);
+
   /// The caller must hold callbackMutex_. A callback already prepared is flushed and torn
   /// down first.
   Result<NoneType, std::string> prepareCallback(const StreamFormat &format);

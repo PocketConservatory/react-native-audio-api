@@ -165,20 +165,31 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
     [sessionManager markInactive];
     if (transitioned) {
       self.interruptionShouldResume = nil;
+      self.stillInterruptedEndReported = false;
       [self emitInterruptionBegan];
     }
   });
 }
 
-- (void)handleInterruptionEnd:(bool)shouldResume
+/// Native recovery always runs. An end that changed the engine state reaches JS, and so does the
+/// first end the OS reported in an interruption whose recovery left the engine Interrupted, so an
+/// app that resumes on `ended` keeps its signal; later such ends and a foreground retry that fails
+/// again stay silent. An end that found nothing interrupted (NoOp) never reaches JS.
+- (void)handleInterruptionEnd:(bool)shouldResume deliveredByOS:(bool)deliveredByOS
 {
   AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
 
   dispatch_async(dispatch_get_main_queue(), ^{
     self.interruptionEndedDelivered = true;
     AudioEngineInterruptionEndOutcome outcome = [audioEngine onInterruptionEnd:shouldResume];
+    bool reportsStillInterrupted = deliveredByOS &&
+        outcome == AudioEngineInterruptionEndOutcomeStillInterrupted &&
+        !self.stillInterruptedEndReported;
+    if (reportsStillInterrupted) {
+      self.stillInterruptedEndReported = true;
+    }
     if (outcome == AudioEngineInterruptionEndOutcomeRunning ||
-        outcome == AudioEngineInterruptionEndOutcomePaused) {
+        outcome == AudioEngineInterruptionEndOutcomePaused || reportsStillInterrupted) {
       [self emitInterruptionEnded:shouldResume];
     }
   });
@@ -198,7 +209,7 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   AudioEngine *audioEngine = self.audioAPIModule.audioEngine;
 
   if (self.interruptionEndedDelivered && [audioEngine getState] == AudioEngineStateInterrupted) {
-    [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery]];
+    [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery] deliveredByOS:false];
   }
 }
 
@@ -217,7 +228,7 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
   bool shouldResume = interruptionOption == AVAudioSessionInterruptionOptionShouldResume;
 
   dispatch_async(dispatch_get_main_queue(), ^{ self.interruptionShouldResume = @(shouldResume); });
-  [self handleInterruptionEnd:shouldResume];
+  [self handleInterruptionEnd:shouldResume deliveredByOS:true];
 }
 
 - (void)handleSecondaryAudio:(NSNotification *)notification
@@ -232,7 +243,7 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
 
   bool shouldResume = secondaryAudioType == AVAudioSessionSilenceSecondaryAudioHintTypeEnd;
 
-  [self handleInterruptionEnd:shouldResume];
+  [self handleInterruptionEnd:shouldResume deliveredByOS:true];
 }
 
 - (void)handleRouteChange:(NSNotification *)notification
@@ -382,7 +393,7 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
     return;
   }
 
-  [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery]];
+  [self handleInterruptionEnd:[self shouldResumeForInterruptionRecovery] deliveredByOS:true];
 }
 
 @end
