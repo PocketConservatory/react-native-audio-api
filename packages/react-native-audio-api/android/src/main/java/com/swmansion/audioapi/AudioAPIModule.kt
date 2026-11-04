@@ -86,7 +86,7 @@ class AudioAPIModule(
   }
 
   override fun onHostResume() {
-    // do nothing
+    MediaSessionManager.onAppForegrounded()
   }
 
   override fun onHostPause() {

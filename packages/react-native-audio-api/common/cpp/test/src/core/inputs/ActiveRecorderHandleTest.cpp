@@ -80,6 +80,7 @@ class FakeAudioRecorder : public AudioRecorder {
   // Mirrors the platform recorders: pause() goes through the shared markPaused(), and
   // isRecording() also requires a live stream, which a reconnect takes away.
   bool streamReconnecting = false;
+  std::vector<int32_t> reopenRequests;
 
   void pause() override {
     markPaused();
@@ -88,6 +89,10 @@ class FakeAudioRecorder : public AudioRecorder {
     if (state_ == RecorderState::Paused) {
       state_ = RecorderState::Recording;
     }
+  }
+
+  void reopenInputStream(int32_t expectedSessionId) override {
+    reopenRequests.push_back(expectedSessionId);
   }
 
   void connect(const std::shared_ptr<RecorderAdapterNode> &) override {}
@@ -170,6 +175,24 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeReachARecorderWhoseStreamIsReconnec
 
   EXPECT_EQ(handle.pause(), RecorderState::Paused);
   EXPECT_EQ(handle.resume(), RecorderState::Recording);
+}
+
+TEST(ActiveRecorderHandleTest, ReopenInputStreamPassesTheExpectedSessionToAnActiveSession) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  recorder->streamSessionId = 41;
+
+  handle.reopenInputStream(41);
+  ASSERT_TRUE(handle.tryStart(recorder, "").is_ok());
+  handle.reopenInputStream(41);
+  handle.pause();
+  handle.reopenInputStream(7);
+  EXPECT_EQ(recorder->reopenRequests, (std::vector<int32_t>{41, 7}));
+
+  ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
+  handle.reopenInputStream(41);
+  EXPECT_EQ(recorder->reopenRequests.size(), 2u);
 }
 
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {

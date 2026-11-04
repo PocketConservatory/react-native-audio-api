@@ -90,6 +90,12 @@ class AudioRecorder {
     return 0;
   }
 
+  /// @brief Replaces the input stream of an active session with a freshly opened one, keeping
+  /// the session's state and outputs; a no-op while idle or once audioSessionId() is no longer
+  /// @p expectedSessionId. For a platform stream that the system keeps silenced after the cause
+  /// is gone (see AndroidAudioRecorder). The default does nothing.
+  virtual void reopenInputStream(int32_t /*expectedSessionId*/) {}
+
   /// @brief Whether the recorder is idle (not recording or paused). Shared by
   /// both platforms.
   bool isIdle() const;
