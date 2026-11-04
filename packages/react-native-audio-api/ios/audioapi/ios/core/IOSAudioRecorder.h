@@ -59,6 +59,9 @@ class IOSAudioRecorder : public AudioRecorder {
   /// input disarmed meanwhile so no buffer in either format slips through.
   Result<NoneType, std::string> reprepareForLiveInput();
   void handleInputNotification(AudioEngineInputNotification notification);
+  /// Re-points the outputs at the live input format and arms the input while Recording. Apart
+  /// from `start()`, which prepares the outputs against the format it has just read, this is the
+  /// only place that arms the input, so it is armed only while the outputs match that format.
   void handleHardwareChange();
 
   int32_t inputChannelCount_{0};

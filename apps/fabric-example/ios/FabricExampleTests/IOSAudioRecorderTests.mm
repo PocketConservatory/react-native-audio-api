@@ -179,6 +179,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
 @property(atomic, strong) dispatch_semaphore_t releaseParkedReprepare;
 @property(atomic, assign) BOOL reprepareIsParked;
 @property(atomic, assign) BOOL armedWhileReprepareParked;
+@property(nonatomic, assign) BOOL armedWhenResumeStarted;
 
 @end
 
@@ -268,6 +269,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
 
 - (BOOL)resume {
   self.resumeCallCount += 1;
+  self.armedWhenResumeStarted = self.inputArmed;
   return self.resumeResult;
 }
 
@@ -608,6 +610,33 @@ public:
   _recorder->resume();
 
   XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertTrue(_recorder->acceptsInput());
+}
+
+- (void)testResumeOfInterruptedRecordingDisarmsInputUntilOutputsMatch {
+  [self assertResumeOfInterruptedRecordingDisarmsInputWhenNativeResumeSucceeds:YES];
+}
+
+- (void)testFailedResumeOfInterruptedRecordingStillRearmsInput {
+  [self assertResumeOfInterruptedRecordingDisarmsInputWhenNativeResumeSucceeds:NO];
+}
+
+/// A recording whose engine an interruption left down is still armed; the
+/// native resume may rebuild the engine with a new format before the recorder
+/// hears about it.
+- (void)assertResumeOfInterruptedRecordingDisarmsInputWhenNativeResumeSucceeds:
+    (BOOL)nativeResumeSucceeds {
+  _recorder->setRecorderState(RecorderState::Recording);
+  self.audioEngine.state = AudioEngineStateInterrupted;
+  self.nativeRecorder.inputArmed = YES;
+  self.nativeRecorder.resumeResult = nativeResumeSucceeds;
+  self.nativeRecorder.reportsFormatChangeOnFirstRefresh = YES;
+
+  _recorder->resume();
+
+  XCTAssertEqual(self.nativeRecorder.resumeCallCount, 1);
+  XCTAssertFalse(self.nativeRecorder.armedWhenResumeStarted);
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
   XCTAssertTrue(_recorder->acceptsInput());
 }
 
