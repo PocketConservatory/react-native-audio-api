@@ -1325,6 +1325,7 @@
   // A player starts the shared engine while the recorder is paused.
   [self attachSourceNodeToAudioEngine];
   XCTAssertTrue([self.audioEngine startIfNecessary]);
+  XCTAssertEqual(notificationCount, 0);
 
   FakeAudioEngine *playbackEngine = self.audioEngine.currentFakeAudioEngine;
   XCTAssertEqual(playbackEngine.startCallCount, 1);
