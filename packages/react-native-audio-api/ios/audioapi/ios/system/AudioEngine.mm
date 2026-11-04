@@ -704,8 +704,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return AudioEngineInterruptionEndOutcomeStillInterrupted;
   }
 
-  [self stopEngine];
-  [self rebuildAudioEngine];
+  [self rebuildGraphForCurrentHardware];
 
   if ([self hasLiveInput] && self.inputNode == nil) {
     NSLog(
@@ -738,7 +737,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 
   self.state = AudioEngineState::AudioEngineStateRunning;
-  self.sessionDeactivationInvalidatedGraph = false;
   return AudioEngineInterruptionEndOutcomeRunning;
 }
 
@@ -762,8 +760,11 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 /// handler with @p lock released, since the handler calls back into the engine. Others may
 /// rebuild, drop or start the engine meanwhile; a build some other caller is still notifying
 /// is notified again here, as the handler tolerates repeats.
-/// @return Whether the current graph may be started. NO when the engine was replaced while the
-/// lock was released: the caller decides again.
+/// Every rebuild meant for a start leaves `graphIsStale` false, so a stale mark seen afterwards
+/// was set while the lock was released (a route change, a session deactivation or
+/// reconfiguration).
+/// @return Whether the current graph may be started. NO when the engine was replaced or marked
+/// stale while the lock was released: the caller decides again.
 - (BOOL)notifyInputOfRebuiltGraph:(std::unique_lock<std::mutex> &)lock
 {
   if (!_inputAwaitsHardwareChange) {
@@ -780,7 +781,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     lock.lock();
   }
 
-  if (self.audioEngine != notifiedEngine) {
+  if (self.audioEngine != notifiedEngine || [self graphIsStale]) {
     return NO;
   }
 
@@ -905,7 +906,6 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
   }
 
   self.state = AudioEngineState::AudioEngineStateRunning;
-  self.sessionDeactivationInvalidatedGraph = false;
   return true;
 }
 
