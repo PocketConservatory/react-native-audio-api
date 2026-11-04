@@ -86,11 +86,11 @@ RecorderState ActiveRecorderHandle::resume() {
   return stateOf(recorder);
 }
 
-void ActiveRecorderHandle::reopenInputStream() {
+void ActiveRecorderHandle::reopenInputStream(int32_t expectedSessionId) {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();
   if (recorder) {
-    recorder->reopenInputStream();
+    recorder->reopenInputStream(expectedSessionId);
   }
 }
 

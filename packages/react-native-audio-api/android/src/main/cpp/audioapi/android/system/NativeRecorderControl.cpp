@@ -44,8 +44,10 @@ jint NativeRecorderControl::activeAudioSessionId(jni::alias_ref<jni::JClass> /*c
   return ActiveRecorderHandle::global().audioSessionId();
 }
 
-void NativeRecorderControl::reopenActiveInputStream(jni::alias_ref<jni::JClass> /*clazz*/) {
-  ActiveRecorderHandle::global().reopenInputStream();
+void NativeRecorderControl::reopenActiveInputStream(
+    jni::alias_ref<jni::JClass> /*clazz*/,
+    jint expectedSessionId) {
+  ActiveRecorderHandle::global().reopenInputStream(expectedSessionId);
 }
 
 } // namespace audioapi

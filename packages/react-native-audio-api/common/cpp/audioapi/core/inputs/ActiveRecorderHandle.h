@@ -58,7 +58,7 @@ class ActiveRecorderHandle {
 
   /// @brief AudioRecorder::reopenInputStream() on the occupant; a no-op when the slot is empty.
   /// Waits on a start or stop in progress, so don't call it on a UI thread.
-  void reopenInputStream();
+  void reopenInputStream(int32_t expectedSessionId);
 
   /// @brief Stops the occupant and returns AudioRecorder::stop()'s Result,
   /// including the original error. On success with non-empty paths, stashes a

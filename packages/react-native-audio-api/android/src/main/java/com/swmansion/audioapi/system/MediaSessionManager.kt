@@ -136,6 +136,13 @@ object MediaSessionManager {
 
   fun isRecordingSilenced(): Boolean = recordingSilenceListener.isRecordingSilenced()
 
+  /** Called when the app's activity comes to the foreground. */
+  fun onAppForegrounded() {
+    if (::recordingSilenceListener.isInitialized) {
+      recordingSilenceListener.onAppForegrounded()
+    }
+  }
+
   fun activelyReclaimSession(enabled: Boolean) {
     // do nothing on android
   }

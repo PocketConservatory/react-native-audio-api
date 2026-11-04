@@ -68,6 +68,17 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
     return Result<NoneType, std::string>::Ok(None);
   }
 
+  auto result = openStream(mStream_);
+  if (result.is_ok()) {
+    adoptStreamProperties();
+  }
+  return result;
+}
+
+/// @brief Builds and opens an input stream into @p stream without starting it. Touches no other
+/// recorder state.
+Result<NoneType, std::string> AndroidAudioRecorder::openStream(
+    std::shared_ptr<oboe::AudioStream> &stream) {
   // Shared with no performance mode keeps the input off MMAP. On that path the system silences
   // this capture when another client takes the microphone and reports it through
   // AudioRecordingConfiguration.isClientSilenced() (RecordingSilenceListener); an MMAP stream is
@@ -85,18 +96,21 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
       ->setDataCallback(shared_from_this())
       ->setErrorCallback(shared_from_this());
 
-  auto result = builder.openStream(mStream_);
+  auto result = builder.openStream(stream);
 
-  if (result != oboe::Result::OK || mStream_ == nullptr) {
+  if (result != oboe::Result::OK || stream == nullptr) {
+    stream.reset();
     return Result<NoneType, std::string>::Err(
         "Failed to open audio stream: " + std::string(oboe::convertToText(result)));
   }
 
+  return Result<NoneType, std::string>::Ok(None);
+}
+
+void AndroidAudioRecorder::adoptStreamProperties() {
   streamSampleRate_ = static_cast<float>(mStream_->getSampleRate());
   streamChannelCount_ = mStream_->getChannelCount();
   streamMaxBufferSizeInFrames_ = mStream_->getBufferSizeInFrames();
-
-  return Result<NoneType, std::string>::Ok(None);
 }
 
 /// @brief prepares and starts the audio recording process.
@@ -486,6 +500,50 @@ int32_t AndroidAudioRecorder::audioSessionId() const {
   return sessionId_.load(std::memory_order_acquire);
 }
 
+/// @brief AudioRecorder::reopenInputStream() for the Oboe input stream.
+/// On Android 14 and earlier, a capture started while the app had no microphone access (not on
+/// top, no microphone-type foreground service) stays silenced for its whole life: the system
+/// checks the RECORD_AUDIO app op when the capture starts and, for an app targeting API 34+,
+/// re-checks it only when the op's setting changes. RecordingSilenceListener asks for a fresh
+/// stream when the app is back in the foreground and such a capture is still silenced.
+/// The replacement is opened before the current stream is touched: when it can't be opened, the
+/// current stream keeps running, the session keeps its state and outputs (so stop() still
+/// finalizes the file), and the error event is dispatched. A stream whose session id is no longer
+/// @p expectedSessionId (the session stopped or a new one started) is left alone.
+/// Callable from any thread except the main looper, since it waits on the recorder locks and on
+/// the old stream's stop.
+void AndroidAudioRecorder::reopenInputStream(int32_t expectedSessionId) {
+  std::scoped_lock reopenLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+
+  if (isIdle() || mStream_ == nullptr ||
+      sessionId_.load(std::memory_order_acquire) != expectedSessionId) {
+    return;
+  }
+
+  std::shared_ptr<oboe::AudioStream> replacement;
+  auto openResult = openStream(replacement);
+  if (!openResult.is_ok()) {
+    std::string message = "Android recorder error: " + openResult.unwrap_err();
+    errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
+    return;
+  }
+
+  mStream_->requestStop();
+  mStream_->close();
+  mStream_ = std::move(replacement);
+  adoptStreamProperties();
+
+  // Started even while paused, as the disconnect reclaim does: the data callback drops buffers
+  // while paused, and a stopped stream leaves the active recording configurations.
+  publishSessionId();
+  auto startResult = mStream_->requestStart();
+  if (startResult != oboe::Result::OK) {
+    std::string message = "Android recorder error: Failed to start stream: " +
+        std::string(oboe::convertToText(startResult));
+    errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
+  }
+}
+
 /// @brief Publishes the current stream's session id. Called under the recorder locks right
 /// before the stream is started.
 void AndroidAudioRecorder::publishSessionId() {
@@ -532,31 +590,6 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
     return;
   }
 
-  replaceStream();
-}
-
-/// @brief Replaces the stream of an active session with a fresh one (see the header).
-/// Android keeps a capture silenced for good when it started while the app couldn't record:
-/// the system checks the RECORD_AUDIO app op once, when the capture starts, and re-checks it
-/// only when the op's setting changes, not when the app regains the microphone. A stream the
-/// disconnect reclaim opened during a call is such a capture, so RecordingSilenceListener asks
-/// for a fresh one once the call is over and the capture is still silenced.
-/// Callable from any thread except the main looper, since it waits on the recorder locks and
-/// on the old stream's stop.
-void AndroidAudioRecorder::reopenInputStream() {
-  std::scoped_lock reopenLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
-
-  if (isIdle() || mStream_ == nullptr) {
-    return;
-  }
-
-  mStream_->requestStop();
-  replaceStream();
-}
-
-/// @brief Closes the current stream and opens and starts a new one, keeping the session state.
-/// Called under the recorder locks with a stream present.
-void AndroidAudioRecorder::replaceStream() {
   // A paused session stays paused across the reclaim: its state is restored,
   // so the fresh stream runs but writes nothing until resume(). cleanup() keeps
   // the published session id, which names the old stream until the new one
