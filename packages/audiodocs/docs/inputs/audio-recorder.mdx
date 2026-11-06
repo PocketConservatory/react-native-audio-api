@@ -1000,3 +1000,9 @@ On Android the recorder opens its input stream in shared mode without the low-la
 A low-latency input can be served by an MMAP stream, even in shared mode, and the system disconnects an MMAP stream instead of silencing it when a call or another app takes the microphone.
 A silenced stream is what lets [`observeRecordingInterruptions`](/docs/system/audio-manager#observerecordinginterruptions) report the interruption and its end.
 :::
+
+:::note Android stream reconnects
+When the input stream disconnects (a route change, or another app taking the microphone), the recorder reopens it and the recording continues in the same file, paused or not as it was.
+A stream that disconnects again within a second of opening counts as a fast disconnect. The first two in a row are reopened at once; after that the recorder waits 250 ms before reopening, doubling up to 5 seconds, and reports the wait as an [`interruption`](/docs/system/audio-manager#observerecordinginterruptions) that ends once a reopened stream keeps running for a second.
+A stream that fails to open is retried the same way rather than ending the session, so nothing is recorded until it opens or you call `stop()`.
+:::

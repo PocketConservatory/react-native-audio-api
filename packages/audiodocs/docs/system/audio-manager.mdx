@@ -127,6 +127,8 @@ Events arrive through the existing [`interruption`](audio-manager#systemeventnam
 - `began` with `shouldResume: false` when the capture is silenced (an incoming or ongoing call, the assistant, another app recording, the microphone privacy toggle), including a recording that starts already silenced.
 - `ended` with `shouldResume: true` once the capture is no longer silenced and no call that started after `began` is still going. A call or communication mode already set when the interruption began (for example the app's own VoIP call) doesn't hold `ended`. Each `began` is followed by at most one `ended`.
 
+The recorder also reports an interruption of its own, on every Android version and whether or not this observation is enabled: when its input stream keeps disconnecting right after it reopens (for example while another app's recorder holds the microphone), it waits longer between reopens, and `began` arrives once it starts waiting. `ended` follows once a reopened stream has kept running for a second. When both causes overlap they share one `began` and one `ended`.
+
 Calls are counted, so each `observeRecordingInterruptions(true)` needs a matching `false` before observation stops.
 
 ```tsx
@@ -166,8 +168,8 @@ Requires Android 10 (API 29) or newer. On older Android versions, iOS and web it
 
 ### `isRecordingSilenced` <Android />
 
-Whether the active recording is currently silenced by the system, or its interruption's `ended` is still held by a call that started after `began` (audio mode in call, in communication or call screening).
-It follows the same rule as the `interruption` events and is tracked only while [`observeRecordingInterruptions`](audio-manager#observerecordinginterruptions) is enabled; otherwise it is `false`.
+Whether the active recording is currently silenced by the system, its interruption's `ended` is still held by a call that started after `began` (audio mode in call, in communication or call screening), or its input stream is waiting to reopen after disconnecting repeatedly.
+It follows the same rule as the `interruption` events. The silenced state is tracked only while [`observeRecordingInterruptions`](audio-manager#observerecordinginterruptions) is enabled.
 
 #### Returns `boolean`. Always `false` on Android versions older than 10 (API 29), iOS and web.
 

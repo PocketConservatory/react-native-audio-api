@@ -6,16 +6,17 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RequiresApi
-import com.swmansion.audioapi.AudioAPIModule
 import java.lang.ref.WeakReference
-import java.util.HashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 /**
  * Reports when the system silences the active recorder's capture (a call, the assistant, another
- * recorder, the mic privacy toggle) as the `interruption` event, without requesting audio focus,
- * so other apps' playback is left alone.
+ * recorder, the mic privacy toggle) to the recorder as its capture-silenced interruption cause
+ * ([NativeRecorderControl.setCaptureSilenced]), without requesting audio focus, so other apps'
+ * playback is left alone. The recorder emits the `interruption` event: `began` when its first
+ * cause appears and `ended` when the last one clears, so a silenced capture and a stream that
+ * keeps disconnecting (its other cause) share one `began`/`ended` pair.
  *
  * The recorder's configuration is the active recording configuration whose client audio session
  * id matches the recorder's current input stream ([NativeRecorderControl.audioSessionId]), read
@@ -23,12 +24,12 @@ import java.util.concurrent.Executors
  * that configuration leaves the state unchanged: a missing configuration is unknown, not
  * unsilenced.
  *
- * - `began` (`shouldResume: false`) once per interruption, when the configuration becomes
- *   silenced, including one that first appears already silenced.
- * - `ended` (`shouldResume: true`) once per `began`, when the configuration is no longer silenced
- *   and no call started after `began`: the audio mode at `began` is recorded, and `ended` is held
- *   while the current mode is a call mode (in call, in communication, call screening) other than
- *   that one. The check is stateless, so the mode listener (API 31+), the poll (API 29–30), the
+ * - The cause is set once per interruption, when the configuration becomes silenced, including
+ *   one that first appears already silenced.
+ * - It is cleared once the configuration is no longer silenced and no call started after it was
+ *   set: the audio mode at that point (`began` below) is recorded, and the clear is held while
+ *   the current mode is a call mode (in call, in communication, call screening) other than that
+ *   one. The check is stateless, so the mode listener (API 31+), the poll (API 29–30), the
  *   recording-configuration callback and [isRecordingSilenced] all apply the same rule and differ
  *   only in when they run. A call mode already set at `began`, such as the host app's own VoIP,
  *   never holds `ended`; a system call silences capture through the ringtone mode first, so its
@@ -42,10 +43,11 @@ import java.util.concurrent.Executors
  *   foreground service), as the disconnect reclaim can do mid-call, stays silenced for its whole
  *   life: the system checks the RECORD_AUDIO app op when the capture starts and, for an app
  *   targeting API 34+, re-checks it only when the op's setting changes. A stream opened once the
- *   app is in the foreground again is unsilenced, and its configuration then emits `ended`
+ *   app is in the foreground again is unsilenced, and its configuration then clears the cause
  *   through the rule above. The reopen is a no-op for a capture that isn't stuck, so it also
  *   covers other causes and runs on every API level.
- * - With no active recorder session the state resets without emitting.
+ * - With no active recorder session, or when observation stops, the state resets and the cause is
+ *   dropped without emitting.
  *
  * The audio mode is observed from `began` until the interruption ends: through the mode listener
  * on API 31+, and a poll on API 29–30.
@@ -54,7 +56,6 @@ import java.util.concurrent.Executors
  */
 class RecordingSilenceListener(
   private val audioManager: WeakReference<AudioManager>,
-  private val audioAPIModule: WeakReference<AudioAPIModule>,
 ) {
   private val handler = Handler(Looper.getMainLooper())
   private val mainExecutor = Executor { handler.post(it) }
@@ -87,7 +88,7 @@ class RecordingSilenceListener(
   @Volatile
   private var captureSilenced = false
 
-  /** The audio mode when `began` was emitted; null while no interruption is in progress. */
+  /** The audio mode when the cause was set; null while no interruption is in progress. */
   @Volatile
   private var modeAtBegan: Int? = null
 
@@ -152,15 +153,16 @@ class RecordingSilenceListener(
   }
 
   /**
-   * True while the active recorder's capture is silenced, or its interruption's `ended` is still
-   * held by a call that started after `began`. Tracked only while observation is enabled. Always
-   * false below API 29. Callable from any thread.
+   * True while the active recorder's capture is silenced, its interruption's `ended` is still
+   * held by a call that started after `began`, or its input stream waits to reopen after
+   * disconnecting repeatedly ([NativeRecorderControl.isReclaimBackingOff]). The silenced state is
+   * tracked only while observation is enabled. Always false below API 29. Callable from any thread.
    */
   fun isRecordingSilenced(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || NativeRecorderControl.audioSessionId() == 0) {
       return false
     }
-    return captureSilenced || isEndedHeld()
+    return captureSilenced || isEndedHeld() || NativeRecorderControl.isReclaimBackingOff()
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)
@@ -196,13 +198,13 @@ class RecordingSilenceListener(
     captureSilenced = config.isClientSilenced
     if (captureSilenced && modeAtBegan == null) {
       modeAtBegan = currentMode()
-      emit(began = true)
+      NativeRecorderControl.setCaptureSilenced(true)
       startObservingMode()
     }
     evaluate()
   }
 
-  /** Applies the class rules to the current configuration state and audio mode: emits `ended`. */
+  /** Applies the class rules to the current configuration state and audio mode: clears the cause. */
   private fun evaluate() {
     if (modeAtBegan == null) {
       stopObservingMode()
@@ -217,7 +219,7 @@ class RecordingSilenceListener(
     modeAtBegan = null
     callModeSeen = false
     stopObservingMode()
-    emit(began = false)
+    NativeRecorderControl.setCaptureSilenced(false)
   }
 
   /** Whether a call seen during this interruption is over and the capture is still silenced. */
@@ -225,6 +227,9 @@ class RecordingSilenceListener(
 
   private fun reset() {
     stopObservingMode()
+    if (modeAtBegan != null) {
+      NativeRecorderControl.dropCaptureSilenced()
+    }
     modeAtBegan = null
     callModeSeen = false
     captureSilenced = false
@@ -284,15 +289,6 @@ class RecordingSilenceListener(
     mode == AudioManager.MODE_IN_CALL ||
       mode == AudioManager.MODE_IN_COMMUNICATION ||
       (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mode == AudioManager.MODE_CALL_SCREENING)
-
-  private fun emit(began: Boolean) {
-    val body =
-      HashMap<String, Any>().apply {
-        put("type", if (began) "began" else "ended")
-        put("shouldResume", !began)
-      }
-    audioAPIModule.get()?.invokeHandlerWithEventNameAndEventBody(AudioEvent.INTERRUPTION.ordinal, body)
-  }
 
   companion object {
     private const val MODE_POLL_INTERVAL_MS = 1_000L

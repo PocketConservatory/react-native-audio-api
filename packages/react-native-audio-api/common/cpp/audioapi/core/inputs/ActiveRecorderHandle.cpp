@@ -59,6 +59,28 @@ int32_t ActiveRecorderHandle::audioSessionId() const {
   return recorder ? recorder->audioSessionId() : 0;
 }
 
+std::shared_ptr<AudioRecorder> ActiveRecorderHandle::sessionSource() const {
+  std::scoped_lock lock(sessionSourceMutex_);
+  return sessionSource_.lock();
+}
+
+void ActiveRecorderHandle::setInterruptionCause(InterruptionCause cause, bool active) {
+  if (const auto recorder = sessionSource()) {
+    recorder->setInterruptionCause(cause, active);
+  }
+}
+
+void ActiveRecorderHandle::dropInterruptionCause(InterruptionCause cause) {
+  if (const auto recorder = sessionSource()) {
+    recorder->dropInterruptionCause(cause);
+  }
+}
+
+bool ActiveRecorderHandle::hasInterruptionCause(InterruptionCause cause) const {
+  const auto recorder = sessionSource();
+  return recorder != nullptr && recorder->hasInterruptionCause(cause);
+}
+
 RecorderState ActiveRecorderHandle::currentState() const {
   std::scoped_lock lock(mutex_);
   const std::shared_ptr<AudioRecorder> recorder = recorder_.lock();

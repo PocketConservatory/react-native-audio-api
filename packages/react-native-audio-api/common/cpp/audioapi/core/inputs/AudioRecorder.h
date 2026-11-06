@@ -1,5 +1,6 @@
 #pragma once
 
+#include <audioapi/core/inputs/InterruptionCauses.h>
 #include <audioapi/core/inputs/RecorderInputPreset.h>
 #include <audioapi/core/inputs/RecorderState.h>
 #include <audioapi/events/AudioEventHandlerRegistry.h>
@@ -103,6 +104,21 @@ class AudioRecorder {
   /// is gone (see AndroidAudioRecorder). The default does nothing.
   virtual void reopenInputStream(int32_t /*expectedSessionId*/) {}
 
+  /// @brief Marks @p cause of the session's interruption active or inactive and dispatches the
+  /// `interruption` event when that begins or ends the interruption (see InterruptionCauses):
+  /// `began` (`shouldResume: false`) for the first active cause, `ended` (`shouldResume: true`)
+  /// once the last one clears. A platform that tracks causes clears them without an event when a
+  /// session starts or stops (clearInterruptionCauses()), so they never outlive their session.
+  /// Never waits on the recorder locks, so it is safe on a UI thread.
+  void setInterruptionCause(InterruptionCause cause, bool active);
+
+  /// @brief Clears @p cause without dispatching anything, for an observer that stops tracking
+  /// it. When it was the last active cause, the interruption ends without an `ended`.
+  void dropInterruptionCause(InterruptionCause cause);
+
+  /// @brief Whether @p cause is active. Never waits on the recorder locks.
+  [[nodiscard]] bool hasInterruptionCause(InterruptionCause cause) const;
+
   /// @brief Whether the recorder is idle (not recording or paused). Shared by
   /// both platforms.
   bool isIdle() const;
@@ -122,6 +138,10 @@ class AudioRecorder {
   /// @brief Whether captured input may be written to the outputs: true only while a session is
   /// recording. Called by the platform data paths on the audio thread; lock-free.
   [[nodiscard]] bool acceptsInput() const;
+
+  /// @brief Clears every interruption cause without dispatching anything. Called by the platform
+  /// start() and stop() under the recorder locks.
+  void clearInterruptionCauses();
 
   bool wantsCallback() const;
   bool wantsFileOutput() const;
@@ -177,6 +197,12 @@ class AudioRecorder {
   std::shared_ptr<AudioEventHandlerRegistry> audioEventHandlerRegistry_;
   EventCaller<AudioEvent::RECORDER_ERROR> errorEvent_;
   std::shared_ptr<AudioFileProperties> fileProperties_ = nullptr;
+
+ private:
+  /// A leaf lock: held only to update interruptionCauses_ and enqueue its event, so a `began`
+  /// and an `ended` from different threads are dispatched in the order the causes changed.
+  mutable std::mutex interruptionMutex_;
+  InterruptionCauses interruptionCauses_;
 };
 
 } // namespace audioapi

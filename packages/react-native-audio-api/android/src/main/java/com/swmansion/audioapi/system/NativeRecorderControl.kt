@@ -39,11 +39,36 @@ object NativeRecorderControl {
    */
   fun reopenInputStream(expectedSessionId: Int) = reopenActiveInputStream(expectedSessionId)
 
+  /**
+   * Reports whether the system silences the active session's capture. The recorder emits the
+   * `interruption` event when this begins or ends its interruption, which also has causes of its
+   * own (see [isReclaimBackingOff]). A no-op without a session. Never blocks on the recorder.
+   */
+  fun setCaptureSilenced(silenced: Boolean) = setActiveCaptureSilenced(silenced)
+
+  /** Clears the silenced report without emitting, for an observer that stops tracking it. */
+  fun dropCaptureSilenced() = dropActiveCaptureSilenced()
+
+  /**
+   * True while the active session waits to reopen an input stream that keeps disconnecting right
+   * after it opens; the recorder reports this as an interruption. Never blocks on the recorder.
+   */
+  fun isReclaimBackingOff(): Boolean = isActiveReclaimBackingOff()
+
   @JvmStatic
   private external fun activeAudioSessionId(): Int
 
   @JvmStatic
   private external fun reopenActiveInputStream(expectedSessionId: Int)
+
+  @JvmStatic
+  private external fun setActiveCaptureSilenced(silenced: Boolean)
+
+  @JvmStatic
+  private external fun dropActiveCaptureSilenced()
+
+  @JvmStatic
+  private external fun isActiveReclaimBackingOff(): Boolean
 
   @JvmStatic
   private external fun stopActiveRecording(): Int

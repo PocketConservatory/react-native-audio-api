@@ -102,10 +102,11 @@ class AudioManager implements IAudioManager {
   }
 
   /**
-   * Whether the active recording is currently silenced by the system, or the
-   * device is in a call (Android 10+). The recording's own silenced state is
-   * tracked only while {@link observeRecordingInterruptions} is enabled. Always
-   * `false` on iOS, web, and older Android versions.
+   * Whether the active recording is currently silenced by the system, the
+   * device is in a call, or its input stream is waiting to reopen after
+   * disconnecting repeatedly (Android 10+). The recording's own silenced state
+   * is tracked only while {@link observeRecordingInterruptions} is enabled.
+   * Always `false` on iOS, web, and older Android versions.
    *
    * @returns `true` while recording now would capture silence.
    */

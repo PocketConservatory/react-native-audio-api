@@ -17,6 +17,9 @@
 #include <audioapi/utils/CircularArray.hpp>
 #include <audioapi/utils/CircularOverflowableAudioArray.h>
 
+#include <chrono>
+#include <cinttypes>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -154,6 +157,9 @@ Result<NoneType, std::string> AndroidAudioRecorder::start(
     return Result<NoneType, std::string>::Err("Recorder is already recording");
   }
 
+  cancelPendingReclaim();
+  reclaimBackoff_.reset();
+  clearInterruptionCauses();
   inputPreset_ = inputPreset;
   auto streamResult = openAudioStream();
 
@@ -213,6 +219,7 @@ Result<NoneType, std::string> AndroidAudioRecorder::start(
         "Failed to start stream: " + std::string(oboe::convertToText(result)));
   }
 
+  markStreamStarted();
   state_.store(RecorderState::Recording, std::memory_order_release);
   return Result<NoneType, std::string>::Ok(None);
 }
@@ -236,6 +243,9 @@ AudioRecorder::StopResult AndroidAudioRecorder::stop() {
     }
 
     state_.store(RecorderState::Idle, std::memory_order_release);
+    cancelPendingReclaim();
+    reclaimBackoff_.reset();
+    clearInterruptionCauses();
 
     // Fully close the stream rather than just stopping it. A stopped-but-open
     // stream keeps the data/error callbacks registered, so a later device
@@ -243,11 +253,7 @@ AudioRecorder::StopResult AndroidAudioRecorder::stop() {
     // stays hot after stop()), and the stream's shared_ptr to this recorder
     // keeps the recorder alive forever once JS drops it (reference cycle).
     // start() reopens the stream when mStream_ is null.
-    if (mStream_ != nullptr) {
-      mStream_->requestStop();
-      mStream_->close();
-      mStream_.reset();
-    }
+    closeStream();
     sessionId_.store(0, std::memory_order_release);
 
     if (usesFileOutput()) {
@@ -384,16 +390,19 @@ void AndroidAudioRecorder::pause() {
   }
 }
 
-/// @brief Resumes the audio recording stream if it was previously paused.
+/// @brief Resumes a paused recording session. A session whose stream is waiting to be reclaimed
+/// resumes too: the reclaimed stream records once it opens.
 /// This method should be called from the JS thread only.
 void AndroidAudioRecorder::resume() {
   std::scoped_lock resumeLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
 
-  if (!isPaused() || mStream_ == nullptr) {
+  if (!isPaused()) {
     return;
   }
 
-  mStream_->start(0);
+  if (mStream_ != nullptr) {
+    mStream_->start(0);
+  }
   state_.store(RecorderState::Recording, std::memory_order_release);
 }
 
@@ -513,7 +522,10 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
   return oboe::DataCallbackResult::Continue;
 }
 
+/// @brief Whether a session is recording on a started stream; false while a disconnected stream
+/// waits to be reclaimed. mStream_ is replaced under all the recorder locks, so one is enough.
 bool AndroidAudioRecorder::isRecording() const {
+  std::scoped_lock lock(fileWriterMutex_);
   return state_.load(std::memory_order_acquire) == RecorderState::Recording &&
       mStream_ != nullptr && mStream_->getState() == oboe::StreamState::Started;
 }
@@ -567,7 +579,9 @@ void AndroidAudioRecorder::reopenInputStream(int32_t expectedSessionId) {
     std::string message = "Android recorder error: Failed to start stream: " +
         std::string(oboe::convertToText(startResult));
     errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
+    return;
   }
+  markStreamStarted();
 }
 
 /// @brief Publishes the current stream's session id. Called under the recorder locks right
@@ -576,18 +590,44 @@ void AndroidAudioRecorder::publishSessionId() {
   sessionId_.store(static_cast<int32_t>(mStream_->getSessionId()), std::memory_order_release);
 }
 
-void AndroidAudioRecorder::cleanup() {
-  state_.store(RecorderState::Idle, std::memory_order_release);
-
+void AndroidAudioRecorder::closeStream() {
   if (mStream_ != nullptr) {
+    mStream_->requestStop();
     mStream_->close();
     mStream_.reset();
   }
 }
 
+/// @brief Records that the current stream just started, for the reclaim's survival window.
+/// Called under the recorder locks.
+void AndroidAudioRecorder::markStreamStarted() {
+  std::scoped_lock lock(reclaimMutex_);
+  streamStartTime_ = Clock::now();
+}
+
+/// @brief Ends any reclaim in progress: a reclaim waiting for its delay or survival window
+/// gives up. Called under the recorder locks.
+/// @returns The generation a reclaim started from now owns.
+uint64_t AndroidAudioRecorder::cancelPendingReclaim() {
+  std::scoped_lock lock(reclaimMutex_);
+  reclaimGeneration_ += 1;
+  reclaimCondition_.notify_all();
+  return reclaimGeneration_;
+}
+
+/// @brief Sets the ReclaimBackoff interruption cause from the back-off policy. Called under the
+/// recorder locks.
+void AndroidAudioRecorder::setReclaimBackingOff() {
+  setInterruptionCause(InterruptionCause::ReclaimBackoff, reclaimBackoff_.isBackingOff());
+}
+
 /// @brief onError callback that is invoked by the Oboe stream when an error occurs.
-/// This method runs on the audio thread.
-/// If the error is a disconnection, it attempts to reopen the stream and resume recording.
+/// Runs on a thread oboe creates for the error, so it may block.
+/// A disconnect of an active session's stream is reclaimed: the stream is closed and reopened,
+/// after a delay when it keeps disconnecting right after it opens (ReclaimBackoff). Until the
+/// reopen, the session keeps its state, outputs and published session id, with no stream; a
+/// back-off is reported as an interruption (InterruptionCause::ReclaimBackoff) that ends once
+/// the reopened stream outlives the survival window. stop() or start() cancels the reclaim.
 /// @param oboeStream Pointer to the Oboe audio stream.
 /// @param error The oboe::Result error code.
 void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Result error) {
@@ -605,47 +645,134 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
     return;
   }
 
-  // Serialize with start()/stop(): they mutate mStream_ under these locks on
-  // the JS thread while this runs on oboe's (detached) error thread.
-  std::scoped_lock restartLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
-
-  // The error thread is detached and can arrive late: if stop()/start() have
-  // already replaced the stream this error belongs to, don't tear down the
-  // healthy new stream.
-  if (stream != mStream_.get()) {
+  // Keeps the recorder alive while this thread waits. When JS drops the recorder, its host
+  // object stops it, which cancels the wait.
+  const auto self = weak_from_this().lock();
+  if (self == nullptr) {
     return;
   }
 
-  // A paused session stays paused across the reclaim: its state is restored,
-  // so the fresh stream runs but writes nothing until resume(). cleanup() keeps
-  // the published session id, which names the old stream until the new one
-  // replaces it, so observers never see the session end in between.
-  const auto stateBeforeTeardown = state_.load(std::memory_order_acquire);
+  uint64_t generation = 0;
+  ReclaimBackoff::Duration delay{};
+  {
+    // Serialize with start()/stop(): they mutate mStream_ under these locks on
+    // the JS thread while this runs on oboe's (detached) error thread.
+    std::scoped_lock restartLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
 
-  cleanup();
+    // The error thread is detached and can arrive late: if stop()/start() have
+    // already replaced the stream this error belongs to, don't tear down the
+    // healthy new stream.
+    if (stream != mStream_.get() || isIdle()) {
+      return;
+    }
 
-  if (stateBeforeTeardown == RecorderState::Idle) {
-    sessionId_.store(0, std::memory_order_release);
-    return;
+    closeStream();
+    const auto lifetime =
+        std::chrono::duration_cast<ReclaimBackoff::Duration>(Clock::now() - streamStartTime_);
+    delay = reclaimBackoff_.disconnected(lifetime);
+    generation = cancelPendingReclaim();
+    setReclaimBackingOff();
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "AndroidAudioRecorder",
+        "reclaim n=%d lifetime=%" PRId64 "ms delay=%" PRId64 "ms",
+        reclaimBackoff_.fastDisconnects(),
+        static_cast<int64_t>(lifetime.count()),
+        static_cast<int64_t>(delay.count()));
   }
 
-  auto streamResult = openAudioStream();
+  reclaimStream(generation, delay);
+}
 
-  if (!streamResult.is_ok()) {
-    sessionId_.store(0, std::memory_order_release);
-    std::string message = "Android recorder error: " + streamResult.unwrap_err();
-    errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
-    return;
+/// @brief Reopens the stream after @p delay, retrying a failed open with the back-off's delays,
+/// until a stream starts or the reclaim is cancelled. Called without the recorder locks.
+void AndroidAudioRecorder::reclaimStream(uint64_t generation, ReclaimBackoff::Duration delay) {
+  auto step = ReclaimStep::Retry;
+  while (step == ReclaimStep::Retry) {
+    if (!waitForReclaim(generation, Clock::now() + delay)) {
+      return;
+    }
+    step = reopenReclaimedStream(generation, delay);
   }
 
-  // Start the fresh stream even when paused: AAudio can't pause an input
-  // stream anyway, and the data callback drops buffers while paused. A stopped
-  // stream drops out of the active recording configurations, so the end of
-  // whatever silenced it (a call) would never be reported. The state is
-  // restored first, so the new stream's callback never sees the teardown's Idle.
-  state_.store(stateBeforeTeardown, std::memory_order_release);
-  publishSessionId();
-  mStream_->requestStart();
+  if (step == ReclaimStep::AwaitSurvival) {
+    awaitReclaimSurvival(generation);
+  }
+}
+
+/// @returns False when the reclaim of @p generation was cancelled before @p deadline.
+bool AndroidAudioRecorder::waitForReclaim(uint64_t generation, Clock::time_point deadline) {
+  std::unique_lock lock(reclaimMutex_);
+  return !reclaimCondition_.wait_until(
+      lock, deadline, [&] { return reclaimGeneration_ != generation; });
+}
+
+/// @brief One reopen attempt of the reclaim of @p generation. A stream that fails to open or
+/// start counts as a fast disconnect: @p delay is set to the wait before the next attempt, with
+/// a warning and no error event, since the attempt repeats while the device refuses the input.
+AndroidAudioRecorder::ReclaimStep AndroidAudioRecorder::reopenReclaimedStream(
+    uint64_t generation,
+    ReclaimBackoff::Duration &delay) {
+  std::scoped_lock reclaimLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+
+  if (reclaimGeneration_ != generation || isIdle() || mStream_ != nullptr) {
+    return ReclaimStep::Finished;
+  }
+
+  auto openResult = openAudioStream();
+  std::string failure;
+  if (openResult.is_ok()) {
+    // Started even while paused: AAudio can't pause an input stream, and the data callback
+    // drops buffers while paused. A stopped stream drops out of the active recording
+    // configurations, so the end of whatever silenced it (a call) would never be reported.
+    publishSessionId();
+    const auto startResult = mStream_->requestStart();
+    if (startResult == oboe::Result::OK) {
+      markStreamStarted();
+      return reclaimBackoff_.isBackingOff() ? ReclaimStep::AwaitSurvival : ReclaimStep::Finished;
+    }
+    closeStream();
+    failure = "Failed to start stream: " + std::string(oboe::convertToText(startResult));
+  } else {
+    failure = openResult.unwrap_err();
+  }
+
+  delay = reclaimBackoff_.openFailed();
+  setReclaimBackingOff();
+  __android_log_print(
+      ANDROID_LOG_WARN,
+      "AndroidAudioRecorder",
+      "reclaim n=%d failed: %s; retry in %" PRId64 "ms",
+      reclaimBackoff_.fastDisconnects(),
+      failure.c_str(),
+      static_cast<int64_t>(delay.count()));
+  return ReclaimStep::Retry;
+}
+
+/// @brief Waits until the reclaimed stream has run for the survival window, then ends the
+/// back-off and its interruption. The window is measured from the current stream's start, so a
+/// reopenInputStream() in between restarts it; a disconnect, start() or stop() cancels it.
+void AndroidAudioRecorder::awaitReclaimSurvival(uint64_t generation) {
+  {
+    std::unique_lock lock(reclaimMutex_);
+    while (true) {
+      if (reclaimGeneration_ != generation) {
+        return;
+      }
+      const auto deadline = streamStartTime_ + ReclaimBackoff::kSurvivalWindow;
+      if (Clock::now() >= deadline) {
+        break;
+      }
+      reclaimCondition_.wait_until(lock, deadline);
+    }
+  }
+
+  std::scoped_lock survivalLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+  if (reclaimGeneration_ != generation || isIdle() || mStream_ == nullptr) {
+    return;
+  }
+  reclaimBackoff_.survived();
+  setReclaimBackingOff();
 }
 
 } // namespace audioapi

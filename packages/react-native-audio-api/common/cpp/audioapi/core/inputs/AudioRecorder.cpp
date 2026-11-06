@@ -93,6 +93,35 @@ bool AudioRecorder::markPaused() {
       expected, RecorderState::Paused, std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
+void AudioRecorder::setInterruptionCause(InterruptionCause cause, bool active) {
+  std::scoped_lock lock(interruptionMutex_);
+  const auto transition = interruptionCauses_.set(cause, active);
+  if (transition == InterruptionTransition::None || audioEventHandlerRegistry_ == nullptr) {
+    return;
+  }
+
+  const bool began = transition == InterruptionTransition::Began;
+  audioEventHandlerRegistry_->dispatchEvent(
+      AudioEvent::INTERRUPTION,
+      kBroadcastListenerId,
+      InterruptionPayload{.type = began ? "began" : "ended", .shouldResume = !began});
+}
+
+void AudioRecorder::dropInterruptionCause(InterruptionCause cause) {
+  std::scoped_lock lock(interruptionMutex_);
+  interruptionCauses_.set(cause, false);
+}
+
+bool AudioRecorder::hasInterruptionCause(InterruptionCause cause) const {
+  std::scoped_lock lock(interruptionMutex_);
+  return interruptionCauses_.has(cause);
+}
+
+void AudioRecorder::clearInterruptionCauses() {
+  std::scoped_lock lock(interruptionMutex_);
+  interruptionCauses_.clear();
+}
+
 bool AudioRecorder::acceptsInput() const {
   return state_.load(std::memory_order_acquire) == RecorderState::Recording;
 }
