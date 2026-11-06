@@ -75,7 +75,7 @@
   assert(audioEngine != nil);
 
   NSError *error = nil;
-  if (![sessionManager ensureActive:false error:&error]) {
+  if (![sessionManager ensureActiveWithError:&error]) {
     NSLog(@"Error while activating audio session for playback: %@", [error debugDescription]);
     return false;
   }
@@ -107,7 +107,7 @@
   assert(audioEngine != nil);
 
   NSError *error = nil;
-  if (![sessionManager ensureActive:false error:&error]) {
+  if (![sessionManager ensureActiveWithError:&error]) {
     NSLog(@"Error while re-activating audio session for playback: %@", [error debugDescription]);
     return false;
   }
