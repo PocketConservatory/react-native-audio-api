@@ -87,7 +87,7 @@ object MediaSessionManager {
     this.audioFocusListener =
       AudioFocusListener(WeakReference(this.audioManager), this.audioAPIModule)
     this.recordingSilenceListener =
-      RecordingSilenceListener(WeakReference(this.audioManager), this.audioAPIModule)
+      RecordingSilenceListener(WeakReference(this.audioManager))
     this.volumeChangeListener = VolumeChangeListener(WeakReference(this.audioManager), this.audioAPIModule)
 
     // Initialize new notification system

@@ -42,7 +42,7 @@ class FakeAudioRecorder : public AudioRecorder {
   std::function<void()> onStreamStarting;
   std::atomic<int32_t> sessionId{0};
 
-  Result<NoneType, std::string> start(const std::string &) override {
+  Result<NoneType, std::string> start(const std::string &, RecorderInputPreset) override {
     if (state_ != RecorderState::Idle) {
       return Err(std::string("Recorder is already recording"));
     }
@@ -193,6 +193,34 @@ TEST(ActiveRecorderHandleTest, ReopenInputStreamPassesTheExpectedSessionToAnActi
   ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
   handle.reopenInputStream(41);
   EXPECT_EQ(recorder->reopenRequests.size(), 2u);
+}
+
+TEST(ActiveRecorderHandleTest, InterruptionCausesReachTheStartingOrActiveSessionOnly) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+
+  handle.setInterruptionCause(InterruptionCause::CaptureSilenced, true);
+  EXPECT_FALSE(recorder->hasInterruptionCause(InterruptionCause::CaptureSilenced));
+  EXPECT_FALSE(handle.hasInterruptionCause(InterruptionCause::CaptureSilenced));
+
+  // An observer can see the session's stream before start() returns.
+  recorder->onStreamStarting = [&handle] {
+    handle.setInterruptionCause(InterruptionCause::CaptureSilenced, true);
+  };
+  ASSERT_TRUE(handle.tryStart(recorder, "").is_ok());
+  EXPECT_TRUE(recorder->hasInterruptionCause(InterruptionCause::CaptureSilenced));
+
+  handle.setInterruptionCause(InterruptionCause::ReclaimBackoff, true);
+  EXPECT_TRUE(handle.hasInterruptionCause(InterruptionCause::ReclaimBackoff));
+  handle.dropInterruptionCause(InterruptionCause::CaptureSilenced);
+  EXPECT_FALSE(handle.hasInterruptionCause(InterruptionCause::CaptureSilenced));
+  EXPECT_TRUE(handle.hasInterruptionCause(InterruptionCause::ReclaimBackoff));
+
+  ASSERT_TRUE(handle.stopAndReturnInfo().is_ok());
+  EXPECT_FALSE(handle.hasInterruptionCause(InterruptionCause::ReclaimBackoff));
+  handle.setInterruptionCause(InterruptionCause::CaptureSilenced, true);
+  EXPECT_FALSE(recorder->hasInterruptionCause(InterruptionCause::CaptureSilenced));
 }
 
 TEST(ActiveRecorderHandleTest, StopStashesResultForSingleConsumption) {

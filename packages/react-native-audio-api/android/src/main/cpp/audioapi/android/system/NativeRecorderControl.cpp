@@ -1,6 +1,7 @@
 #include <audioapi/android/system/NativeRecorderControl.h>
 
 #include <audioapi/core/inputs/ActiveRecorderHandle.h>
+#include <audioapi/core/inputs/InterruptionCauses.h>
 #include <audioapi/core/inputs/RecorderState.h>
 
 namespace audioapi {
@@ -21,6 +22,11 @@ void NativeRecorderControl::registerNatives() {
       makeNativeMethod("currentRecorderState", NativeRecorderControl::currentRecorderState),
       makeNativeMethod("activeAudioSessionId", NativeRecorderControl::activeAudioSessionId),
       makeNativeMethod("reopenActiveInputStream", NativeRecorderControl::reopenActiveInputStream),
+      makeNativeMethod("setActiveCaptureSilenced", NativeRecorderControl::setActiveCaptureSilenced),
+      makeNativeMethod(
+          "dropActiveCaptureSilenced", NativeRecorderControl::dropActiveCaptureSilenced),
+      makeNativeMethod(
+          "isActiveReclaimBackingOff", NativeRecorderControl::isActiveReclaimBackingOff),
   });
 }
 
@@ -48,6 +54,23 @@ void NativeRecorderControl::reopenActiveInputStream(
     jni::alias_ref<jni::JClass> /*clazz*/,
     jint expectedSessionId) {
   ActiveRecorderHandle::global().reopenInputStream(expectedSessionId);
+}
+
+void NativeRecorderControl::setActiveCaptureSilenced(
+    jni::alias_ref<jni::JClass> /*clazz*/,
+    jboolean silenced) {
+  ActiveRecorderHandle::global().setInterruptionCause(
+      InterruptionCause::CaptureSilenced, silenced == JNI_TRUE);
+}
+
+void NativeRecorderControl::dropActiveCaptureSilenced(jni::alias_ref<jni::JClass> /*clazz*/) {
+  ActiveRecorderHandle::global().dropInterruptionCause(InterruptionCause::CaptureSilenced);
+}
+
+jboolean NativeRecorderControl::isActiveReclaimBackingOff(jni::alias_ref<jni::JClass> /*clazz*/) {
+  return ActiveRecorderHandle::global().hasInterruptionCause(InterruptionCause::ReclaimBackoff)
+      ? JNI_TRUE
+      : JNI_FALSE;
 }
 
 } // namespace audioapi

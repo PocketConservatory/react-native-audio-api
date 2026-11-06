@@ -258,8 +258,28 @@ export interface WaveShaperOptions extends AudioNodeOptions {
 export type DecodeDataInput = number | string | ArrayBuffer;
 export type AudioDurationInput = string | ArrayBuffer;
 
+/**
+ * Capture source the recorder asks Android for, mirroring the AAudio / Oboe
+ * input presets (`generic` is `MediaRecorder.AudioSource.MIC`). It decides
+ * which microphone and which processing the system applies.
+ */
+export type AudioRecorderInputPreset =
+  | 'generic'
+  | 'voiceRecognition'
+  | 'unprocessed'
+  | 'voicePerformance'
+  | 'camcorder'
+  | 'voiceCommunication';
+
 export interface AudioRecorderStartOptions {
   fileNameOverride?: string;
+
+  /**
+   * Android only: the capture source of the session's input stream, kept for
+   * every stream the session reopens. Defaults to `'voiceRecognition'`. Ignored
+   * on iOS.
+   */
+  inputPreset?: AudioRecorderInputPreset;
 }
 
 export enum AutomationEventType {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <audioapi/core/inputs/InterruptionCauses.h>
+#include <audioapi/core/inputs/RecorderInputPreset.h>
 #include <audioapi/core/inputs/RecorderState.h>
 #include <audioapi/utils/Macros.h>
 #include <audioapi/utils/Result.hpp>
@@ -36,7 +38,8 @@ class ActiveRecorderHandle {
   /// recorder already occupies it. The slot is assigned only if start succeeds.
   Result<NoneType, std::string> tryStart(
       const std::shared_ptr<AudioRecorder> &recorder,
-      const std::string &fileNameOverride);
+      const std::string &fileNameOverride,
+      RecorderInputPreset inputPreset = RecorderInputPreset::VoiceRecognition);
 
   /// @brief The state of the recorder in the slot, or Idle when the slot is empty.
   [[nodiscard]] RecorderState currentState() const;
@@ -45,6 +48,16 @@ class ActiveRecorderHandle {
   /// starting, so an observer sees the id before start() returns; 0 when there is neither.
   /// Never waits on a start or stop in progress, so it is safe on a UI thread.
   [[nodiscard]] int32_t audioSessionId() const;
+
+  /// @brief AudioRecorder::setInterruptionCause() on the session audioSessionId() reads; a no-op
+  /// when there is none. Never waits on a start or stop in progress, so it is safe on a UI thread.
+  void setInterruptionCause(InterruptionCause cause, bool active);
+
+  /// @brief AudioRecorder::dropInterruptionCause() on the same session; a no-op when there is none.
+  void dropInterruptionCause(InterruptionCause cause);
+
+  /// @brief AudioRecorder::hasInterruptionCause() of the same session; false when there is none.
+  [[nodiscard]] bool hasInterruptionCause(InterruptionCause cause) const;
 
   /// @brief True while a recording session is active; a paused recording counts as
   /// ongoing because it still owns an open output file.
@@ -95,6 +108,7 @@ class ActiveRecorderHandle {
   mutable std::mutex sessionSourceMutex_;
   std::weak_ptr<AudioRecorder> sessionSource_;
   void setSessionSource(const std::weak_ptr<AudioRecorder> &recorder);
+  [[nodiscard]] std::shared_ptr<AudioRecorder> sessionSource() const;
   std::optional<FileInfo> lastResult_;
 };
 

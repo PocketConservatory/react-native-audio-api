@@ -378,7 +378,8 @@ export default MyRecorder;
       <td>
         <div class="text-content">
           Starts the stream from system audio input device. Returns a `Promise` that resolves when recording has started.
-          You can pass optional object with `fileNameOverride` string, to provide your own fileName generation.
+          You can pass optional object with `fileNameOverride` string, to provide your own fileName generation,
+          and, on Android, an `inputPreset` (see [`AudioRecorderStartOptions`](#audiorecorderstartoptions)).
         </div>
         ```tsx
         const result = await audioRecorder.start({
@@ -687,6 +688,25 @@ interface AudioRecorderCallbackOptions {
 
 - `channelCount` - The desired number of audio channels per buffer. Typically 1 for mono or 2 for stereo recordings.
 
+#### AudioRecorderStartOptions
+
+```tsx
+interface AudioRecorderStartOptions {
+  fileNameOverride?: string;
+  inputPreset?:
+    | 'generic'
+    | 'voiceRecognition'
+    | 'unprocessed'
+    | 'voicePerformance'
+    | 'camcorder'
+    | 'voiceCommunication';
+}
+```
+
+- `fileNameOverride` - File name used for the file output instead of a generated one.
+
+- `inputPreset` - Android only (ignored on iOS). The capture source of the input stream, mirroring the AAudio / Oboe input presets (`generic` is `MediaRecorder.AudioSource.MIC`); it decides which microphone and which processing the system applies, and is kept when the stream reconnects. Defaults to `'voiceRecognition'`. Use `'generic'` when another capture client in your app records with the MIC source at the same time (e.g. an RTC SDK): on some devices the two sources map to different microphones, and Android re-routes the shared input every time the recorder opens, which disconnects it.
+
 #### OnRecorderErrorEventType
 
 ```tsx
@@ -979,4 +999,10 @@ export interface FilePresetType {
 On Android the recorder opens its input stream in shared mode without the low-latency performance mode, so expect higher input latency than a low-latency stream.
 A low-latency input can be served by an MMAP stream, even in shared mode, and the system disconnects an MMAP stream instead of silencing it when a call or another app takes the microphone.
 A silenced stream is what lets [`observeRecordingInterruptions`](/docs/system/audio-manager#observerecordinginterruptions) report the interruption and its end.
+:::
+
+:::note Android stream reconnects
+When the input stream disconnects (a route change, or another app taking the microphone), the recorder reopens it and the recording continues in the same file, paused or not as it was.
+A stream that disconnects again within a second of opening counts as a fast disconnect. The first two in a row are reopened at once; after that the recorder waits 250 ms before reopening, doubling up to 5 seconds, and reports the wait as an [`interruption`](/docs/system/audio-manager#observerecordinginterruptions) that ends once a reopened stream keeps running for a second.
+A stream that fails to open is retried the same way rather than ending the session, so nothing is recorded until it opens or you call `stop()`.
 :::
