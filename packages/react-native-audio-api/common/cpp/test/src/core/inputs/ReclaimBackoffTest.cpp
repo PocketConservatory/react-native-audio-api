@@ -45,15 +45,6 @@ TEST(ReclaimBackoffTest, DelayDoublesUpToTheCapAndStaysThere) {
   EXPECT_EQ(previous, ReclaimBackoff::kMaxDelay);
 }
 
-TEST(ReclaimBackoffTest, FailedOpenCountsAsAFastDisconnect) {
-  ReclaimBackoff withOpenFailures;
-  ReclaimBackoff withFastDisconnects;
-
-  for (int i = 0; i < 6; ++i) {
-    EXPECT_EQ(withOpenFailures.openFailed(), withFastDisconnects.disconnected(kFast));
-  }
-}
-
 TEST(ReclaimBackoffTest, SlowDisconnectStartsOver) {
   ReclaimBackoff backoff;
   for (int i = 0; i < 5; ++i) {

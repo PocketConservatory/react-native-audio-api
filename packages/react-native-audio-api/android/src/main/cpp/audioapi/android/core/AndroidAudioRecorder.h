@@ -76,6 +76,11 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   facebook::jni::global_ref<NativeAudioRecorder> nativeAudioRecorder_;
 
   std::shared_ptr<oboe::AudioStream> mStream_;
+  /// True while mStream_ has started and not been closed since, so isRecording() reads it
+  /// without the recorder locks. Set only by markStreamStarted() and cleared only by
+  /// closeStream(), both under the recorder locks; every path that starts, closes or replaces
+  /// mStream_ goes through them.
+  std::atomic<bool> streamStarted_{false};
   /// Input preset of the current session, set by start() and used by every stream it opens,
   /// including the disconnect reclaim and reopenInputStream(). Guarded by the recorder locks.
   RecorderInputPreset inputPreset_ = RecorderInputPreset::VoiceRecognition;

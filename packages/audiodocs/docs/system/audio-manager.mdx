@@ -171,7 +171,7 @@ Requires Android 10 (API 29) or newer. On older Android versions, iOS and web it
 Whether the active recording is currently silenced by the system, its interruption's `ended` is still held by a call that started after `began` (audio mode in call, in communication or call screening), or its input stream is waiting to reopen after disconnecting repeatedly.
 It follows the same rule as the `interruption` events. The silenced state is tracked only while [`observeRecordingInterruptions`](audio-manager#observerecordinginterruptions) is enabled.
 
-#### Returns `boolean`. Always `false` on Android versions older than 10 (API 29), iOS and web.
+#### Returns `boolean`. Always `false` on iOS and web. On Android versions older than 10 (API 29) only the wait to reopen the input stream counts.
 
 ### `observeVolumeChanges`
 

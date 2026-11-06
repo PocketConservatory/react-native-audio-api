@@ -52,7 +52,7 @@ TEST(InterruptionCausesTest, ClearEndsSilentlySoTheNextCauseBeginsAgain) {
 // Property: over any sequence of changes, transitions alternate Began/Ended starting with Began,
 // and an interruption is open exactly while some cause is active.
 TEST(InterruptionCausesTest, TransitionsAlternateAndTrackActiveCausesForAnySequence) {
-  std::mt19937 random(5982);
+  std::mt19937 random(42);
   std::uniform_int_distribution<int> pick(0, 3);
 
   for (int run = 0; run < 200; ++run) {

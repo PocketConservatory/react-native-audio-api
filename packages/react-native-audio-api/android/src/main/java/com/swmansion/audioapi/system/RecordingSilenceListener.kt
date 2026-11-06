@@ -156,13 +156,13 @@ class RecordingSilenceListener(
    * True while the active recorder's capture is silenced, its interruption's `ended` is still
    * held by a call that started after `began`, or its input stream waits to reopen after
    * disconnecting repeatedly ([NativeRecorderControl.isReclaimBackingOff]). The silenced state is
-   * tracked only while observation is enabled. Always false below API 29. Callable from any thread.
+   * tracked only while observation is enabled. Below API 29 only the reopen wait counts. Callable
+   * from any thread.
    */
   fun isRecordingSilenced(): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || NativeRecorderControl.audioSessionId() == 0) {
-      return false
-    }
-    return captureSilenced || isEndedHeld() || NativeRecorderControl.isReclaimBackingOff()
+    if (NativeRecorderControl.audioSessionId() == 0) return false
+    if (NativeRecorderControl.isReclaimBackingOff()) return true
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && (captureSilenced || isEndedHeld())
   }
 
   @RequiresApi(Build.VERSION_CODES.Q)

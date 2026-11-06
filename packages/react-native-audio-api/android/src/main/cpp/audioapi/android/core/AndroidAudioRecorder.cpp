@@ -523,11 +523,10 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
 }
 
 /// @brief Whether a session is recording on a started stream; false while a disconnected stream
-/// waits to be reclaimed. mStream_ is replaced under all the recorder locks, so one is enough.
+/// waits to be reclaimed. Lock-free (see streamStarted_).
 bool AndroidAudioRecorder::isRecording() const {
-  std::scoped_lock lock(fileWriterMutex_);
   return state_.load(std::memory_order_acquire) == RecorderState::Recording &&
-      mStream_ != nullptr && mStream_->getState() == oboe::StreamState::Started;
+      streamStarted_.load(std::memory_order_acquire);
 }
 
 bool AndroidAudioRecorder::isPaused() const {
@@ -566,8 +565,7 @@ void AndroidAudioRecorder::reopenInputStream(int32_t expectedSessionId) {
     return;
   }
 
-  mStream_->requestStop();
-  mStream_->close();
+  closeStream();
   mStream_ = std::move(replacement);
   adoptStreamProperties();
 
@@ -590,7 +588,9 @@ void AndroidAudioRecorder::publishSessionId() {
   sessionId_.store(static_cast<int32_t>(mStream_->getSessionId()), std::memory_order_release);
 }
 
+/// @brief Stops, closes and drops the current stream. Called under the recorder locks.
 void AndroidAudioRecorder::closeStream() {
+  streamStarted_.store(false, std::memory_order_release);
   if (mStream_ != nullptr) {
     mStream_->requestStop();
     mStream_->close();
@@ -598,9 +598,10 @@ void AndroidAudioRecorder::closeStream() {
   }
 }
 
-/// @brief Records that the current stream just started, for the reclaim's survival window.
-/// Called under the recorder locks.
+/// @brief Records that the current stream just started, for isRecording() and the reclaim's
+/// survival window. Called under the recorder locks.
 void AndroidAudioRecorder::markStreamStarted() {
+  streamStarted_.store(true, std::memory_order_release);
   std::scoped_lock lock(reclaimMutex_);
   streamStartTime_ = Clock::now();
 }
