@@ -42,7 +42,7 @@ class FakeAudioRecorder : public AudioRecorder {
   std::function<void()> onStreamStarting;
   std::atomic<int32_t> sessionId{0};
 
-  Result<NoneType, std::string> start(const std::string &) override {
+  Result<NoneType, std::string> start(const std::string &, RecorderInputPreset) override {
     if (state_ != RecorderState::Idle) {
       return Err(std::string("Recorder is already recording"));
     }

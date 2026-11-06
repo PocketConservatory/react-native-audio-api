@@ -31,7 +31,9 @@ class IOSAudioRecorder : public AudioRecorder {
   IOSAudioRecorder(const std::shared_ptr<AudioEventHandlerRegistry> &audioEventHandlerRegistry);
   ~IOSAudioRecorder() override;
 
-  Result<NoneType, std::string> start(const std::string &fileNameOverride = "") override;
+  Result<NoneType, std::string> start(
+      const std::string &fileNameOverride,
+      RecorderInputPreset inputPreset) override;
   StopResult stop() override;
 
   Result<NoneType, std::string> enableFileOutput(

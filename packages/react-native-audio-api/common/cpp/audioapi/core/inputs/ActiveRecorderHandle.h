@@ -1,5 +1,6 @@
 #pragma once
 
+#include <audioapi/core/inputs/RecorderInputPreset.h>
 #include <audioapi/core/inputs/RecorderState.h>
 #include <audioapi/utils/Macros.h>
 #include <audioapi/utils/Result.hpp>
@@ -36,7 +37,8 @@ class ActiveRecorderHandle {
   /// recorder already occupies it. The slot is assigned only if start succeeds.
   Result<NoneType, std::string> tryStart(
       const std::shared_ptr<AudioRecorder> &recorder,
-      const std::string &fileNameOverride);
+      const std::string &fileNameOverride,
+      RecorderInputPreset inputPreset = RecorderInputPreset::VoiceRecognition);
 
   /// @brief The state of the recorder in the slot, or Idle when the slot is empty.
   [[nodiscard]] RecorderState currentState() const;

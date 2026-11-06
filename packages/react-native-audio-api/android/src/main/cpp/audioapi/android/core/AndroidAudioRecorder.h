@@ -28,7 +28,9 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   ~AndroidAudioRecorder() override;
   void cleanup();
 
-  Result<NoneType, std::string> start(const std::string &fileNameOverride) override;
+  Result<NoneType, std::string> start(
+      const std::string &fileNameOverride,
+      RecorderInputPreset inputPreset) override;
   StopResult stop() override;
 
   Result<NoneType, std::string> enableFileOutput(
@@ -71,6 +73,9 @@ class AndroidAudioRecorder : public oboe::AudioStreamCallback,
   facebook::jni::global_ref<NativeAudioRecorder> nativeAudioRecorder_;
 
   std::shared_ptr<oboe::AudioStream> mStream_;
+  /// Input preset of the current session, set by start() and used by every stream it opens,
+  /// including the disconnect reclaim and reopenInputStream(). Guarded by the recorder locks.
+  RecorderInputPreset inputPreset_ = RecorderInputPreset::VoiceRecognition;
   /// Written under the recorder locks, read lock-free through audioSessionId().
   std::atomic<int32_t> sessionId_{0};
   void publishSessionId();

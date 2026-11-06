@@ -25,6 +25,28 @@
 
 namespace audioapi {
 
+namespace {
+
+oboe::InputPreset toOboeInputPreset(RecorderInputPreset preset) {
+  switch (preset) {
+    case RecorderInputPreset::Generic:
+      return oboe::InputPreset::Generic;
+    case RecorderInputPreset::Camcorder:
+      return oboe::InputPreset::Camcorder;
+    case RecorderInputPreset::VoiceCommunication:
+      return oboe::InputPreset::VoiceCommunication;
+    case RecorderInputPreset::Unprocessed:
+      return oboe::InputPreset::Unprocessed;
+    case RecorderInputPreset::VoicePerformance:
+      return oboe::InputPreset::VoicePerformance;
+    case RecorderInputPreset::VoiceRecognition:
+      return oboe::InputPreset::VoiceRecognition;
+  }
+  return oboe::InputPreset::VoiceRecognition;
+}
+
+} // namespace
+
 AndroidAudioRecorder::AndroidAudioRecorder(
     const std::shared_ptr<AudioEventHandlerRegistry> &audioEventHandlerRegistry)
     : AudioRecorder(audioEventHandlerRegistry),
@@ -75,8 +97,8 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
   return result;
 }
 
-/// @brief Builds and opens an input stream into @p stream without starting it. Touches no other
-/// recorder state.
+/// @brief Builds and opens an input stream into @p stream without starting it, with the session's
+/// input preset. Touches no other recorder state.
 Result<NoneType, std::string> AndroidAudioRecorder::openStream(
     std::shared_ptr<oboe::AudioStream> &stream) {
   // Shared with no performance mode keeps the input off MMAP. On that path the system silences
@@ -92,6 +114,7 @@ Result<NoneType, std::string> AndroidAudioRecorder::openStream(
       ->setFormatConversionAllowed(true)
       ->setPerformanceMode(oboe::PerformanceMode::None)
       ->setSessionId(oboe::SessionId::Allocate)
+      ->setInputPreset(toOboeInputPreset(inputPreset_))
       ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
       ->setDataCallback(shared_from_this())
       ->setErrorCallback(shared_from_this());
@@ -122,13 +145,16 @@ void AndroidAudioRecorder::adoptStreamProperties() {
 /// RN side requires their "file://" prefix, but sometimes it returned raw path.
 /// Most likely this was due to alpha version mistakes, but in case of problems leaving this here. (ㆆ _ ㆆ)
 /// @returns On success, returns the file URI where the recording is being saved (if file output is enabled).
-Result<NoneType, std::string> AndroidAudioRecorder::start(const std::string &fileNameOverride) {
+Result<NoneType, std::string> AndroidAudioRecorder::start(
+    const std::string &fileNameOverride,
+    RecorderInputPreset inputPreset) {
   std::scoped_lock startLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
 
   if (!isIdle()) {
     return Result<NoneType, std::string>::Err("Recorder is already recording");
   }
 
+  inputPreset_ = inputPreset;
   auto streamResult = openAudioStream();
 
   if (!streamResult.is_ok()) {

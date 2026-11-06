@@ -312,8 +312,11 @@ void IOSAudioRecorder::rollbackFailedStart()
 /// @brief Starts the audio recording process and prepares necessary resources.
 /// Invoked asynchronously from the PromiseVendor thread pool (not the JS thread);
 /// all shared state is guarded by the recorder locks and atomics.
+/// @param inputPreset Ignored: the Android capture source has no iOS counterpart.
 /// @returns Result containing the file path if recording started successfully, or an error message.
-Result<NoneType, std::string> IOSAudioRecorder::start(const std::string &fileNameOverride)
+Result<NoneType, std::string> IOSAudioRecorder::start(
+    const std::string &fileNameOverride,
+    RecorderInputPreset /*inputPreset*/)
 {
   if (!isIdle()) {
     return Result<NoneType, std::string>::Err("Recorder is already recording");

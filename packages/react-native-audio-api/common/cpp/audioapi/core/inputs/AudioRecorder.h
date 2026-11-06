@@ -1,5 +1,6 @@
 #pragma once
 
+#include <audioapi/core/inputs/RecorderInputPreset.h>
 #include <audioapi/core/inputs/RecorderState.h>
 #include <audioapi/events/AudioEventHandlerRegistry.h>
 #include <audioapi/events/EventCaller.hpp>
@@ -41,7 +42,13 @@ class AudioRecorder {
   AudioRecorder &operator=(AudioRecorder &&) = delete;
   virtual ~AudioRecorder() = default;
 
-  virtual Result<NoneType, std::string> start(const std::string &fileNameOverride) = 0;
+  /// @brief Starts a recording session.
+  /// @param fileNameOverride File name for the file output, or empty for a generated one.
+  /// @param inputPreset Capture source for the session's input stream, kept for every stream the
+  /// session reopens (see RecorderInputPreset); platforms without one ignore it.
+  virtual Result<NoneType, std::string> start(
+      const std::string &fileNameOverride,
+      RecorderInputPreset inputPreset) = 0;
   virtual StopResult stop() = 0;
 
   virtual Result<NoneType, std::string> enableFileOutput(

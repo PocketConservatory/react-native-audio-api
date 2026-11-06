@@ -57,11 +57,16 @@ AudioRecorderHostObject::~AudioRecorderHostObject() {
 
 JSI_HOST_FUNCTION_IMPL(AudioRecorderHostObject, start) {
   auto fileNameOverride = jsiutils::argToString(runtime, args, count, 0, "");
+  auto inputPreset =
+      recorderInputPresetFromString(jsiutils::argToString(runtime, args, count, 1, ""));
   auto audioRecorder = audioRecorder_;
 
   return promiseVendor_->createAsyncPromise(
-      [audioRecorder, fileNameOverride = std::move(fileNameOverride)]() -> PromiseResolver {
-        auto result = ActiveRecorderHandle::global().tryStart(audioRecorder, fileNameOverride);
+      [audioRecorder,
+          fileNameOverride = std::move(fileNameOverride),
+          inputPreset]() -> PromiseResolver {
+        auto result =
+            ActiveRecorderHandle::global().tryStart(audioRecorder, fileNameOverride, inputPreset);
 
         return [result = std::move(result)](
                    jsi::Runtime &runtime) -> std::variant<jsi::Value, std::string> {

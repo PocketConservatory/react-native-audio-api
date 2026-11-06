@@ -378,7 +378,8 @@ export default MyRecorder;
       <td>
         <div class="text-content">
           Starts the stream from system audio input device. Returns a `Promise` that resolves when recording has started.
-          You can pass optional object with `fileNameOverride` string, to provide your own fileName generation.
+          You can pass optional object with `fileNameOverride` string, to provide your own fileName generation,
+          and, on Android, an `inputPreset` (see [`AudioRecorderStartOptions`](#audiorecorderstartoptions)).
         </div>
         ```tsx
         const result = await audioRecorder.start({
@@ -686,6 +687,25 @@ interface AudioRecorderCallbackOptions {
 - `bufferLength` - The preferred size of each audio buffer, expressed as the number of samples per channel. Smaller buffers reduce latency but increase CPU load, while larger buffers improve efficiency at the cost of higher latency.
 
 - `channelCount` - The desired number of audio channels per buffer. Typically 1 for mono or 2 for stereo recordings.
+
+#### AudioRecorderStartOptions
+
+```tsx
+interface AudioRecorderStartOptions {
+  fileNameOverride?: string;
+  inputPreset?:
+    | 'generic'
+    | 'voiceRecognition'
+    | 'unprocessed'
+    | 'voicePerformance'
+    | 'camcorder'
+    | 'voiceCommunication';
+}
+```
+
+- `fileNameOverride` - File name used for the file output instead of a generated one.
+
+- `inputPreset` - Android only (ignored on iOS). The capture source of the input stream, mirroring the AAudio / Oboe input presets (`generic` is `MediaRecorder.AudioSource.MIC`); it decides which microphone and which processing the system applies, and is kept when the stream reconnects. Defaults to `'voiceRecognition'`. Use `'generic'` when another capture client in your app records with the MIC source at the same time (e.g. an RTC SDK): on some devices the two sources map to different microphones, and Android re-routes the shared input every time the recorder opens, which disconnects it.
 
 #### OnRecorderErrorEventType
 
