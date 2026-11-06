@@ -8,8 +8,9 @@ namespace audioapi {
 ///
 /// Some devices disconnect a fresh input stream again right after it starts (a shared input
 /// re-routed to another microphone when another client's higher-priority source becomes
-/// active), so reopening at once turns into a tight open/disconnect loop. A disconnect is fast when its stream lived less than kSurvivalWindow; a failed open
-/// counts as a fast disconnect with no lifetime. The first kImmediateReopens fast disconnects
+/// active), so reopening at once turns into a tight open/disconnect loop. A disconnect is fast
+/// when its stream lived less than kSurvivalWindow; a failed open counts as a fast disconnect
+/// with no lifetime. The first kImmediateReopens fast disconnects
 /// in a row reopen at once; later ones wait kInitialDelay, doubling up to kMaxDelay. A slow
 /// disconnect, or a stream that outlives the window (survived()), starts the count over.
 /// Pure: the caller passes in the stream lifetimes. Not synchronized; the owner guards it.
