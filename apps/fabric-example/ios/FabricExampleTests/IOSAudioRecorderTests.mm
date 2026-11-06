@@ -96,7 +96,7 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture()
   return self.recordingPermissions;
 }
 
-- (bool)ensureActive:(bool)force error:(NSError **)error
+- (bool)ensureActiveWithError:(NSError **)error
 {
   if (error != nil) {
     *error = nil;

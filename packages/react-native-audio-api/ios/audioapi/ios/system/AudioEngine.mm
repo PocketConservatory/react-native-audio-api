@@ -235,7 +235,7 @@ static AudioEngine *_sharedInstance = nil;
   }
 
   NSError *sessionError = nil;
-  if (![self.sessionManager ensureActive:true error:&sessionError]) {
+  if (![self.sessionManager ensureActiveWithError:&sessionError]) {
     NSLog(
         @"Error while activating audio session before input materialization: %@",
         [sessionError debugDescription]);
@@ -517,7 +517,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
     return AudioEngineInterruptionEndOutcomePaused;
   }
 
-  if (![self.sessionManager ensureActive:true error:&error]) {
+  if (![self.sessionManager ensureActiveWithError:&error]) {
     NSLog(@"Error while activating audio session after interruption: %@", [error debugDescription]);
     return AudioEngineInterruptionEndOutcomeStillInterrupted;
   }
@@ -615,7 +615,7 @@ shouldEngineResumeAfterInterruption(BOOL shouldPlaybackResume, BOOL hasLiveInput
 
   [self createAudioEngineIfNeeded];
 
-  if (![self.sessionManager ensureActive:true error:&error]) {
+  if (![self.sessionManager ensureActiveWithError:&error]) {
     NSLog(@"Error while activating audio session: %@", [error debugDescription]);
     return false;
   }

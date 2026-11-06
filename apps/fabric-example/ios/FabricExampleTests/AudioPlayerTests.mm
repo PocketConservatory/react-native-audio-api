@@ -62,7 +62,6 @@ class IOSAudioPlayer {
 @property(nonatomic, assign) BOOL ensureActiveResult;
 @property(nonatomic, strong) NSError *ensureActiveFailure;
 @property(nonatomic, assign) NSInteger ensureActiveCallCount;
-@property(nonatomic, assign) BOOL lastEnsureActiveForce;
 
 @end
 
@@ -77,10 +76,9 @@ class IOSAudioPlayer {
   return self;
 }
 
-- (bool)ensureActive:(bool)force error:(NSError **)error
+- (bool)ensureActiveWithError:(NSError **)error
 {
   self.ensureActiveCallCount += 1;
-  self.lastEnsureActiveForce = force;
 
   if (!self.ensureActiveResult && error != nil) {
     *error = self.ensureActiveFailure;
@@ -344,7 +342,6 @@ struct TestAudioOutput {
 
   XCTAssertTrue(operation(player, selector));
   XCTAssertEqual(self.sessionManager.ensureActiveCallCount, 1);
-  XCTAssertFalse(self.sessionManager.lastEnsureActiveForce);
   XCTAssertEqual(self.audioEngine.stopIfNecessaryCallCount, 1);
   XCTAssertEqual(self.audioEngine.attachSourceNodeCallCount, 1);
   XCTAssertEqual(self.audioEngine.startIfNecessaryCallCount, 1);

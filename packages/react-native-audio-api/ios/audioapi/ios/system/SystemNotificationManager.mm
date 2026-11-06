@@ -301,7 +301,7 @@ static NSString *NotificationManagerContext = @"SystemNotificationManagerContext
 
   dispatch_async(dispatch_get_main_queue(), ^{
     [sessionManager markInactive];
-    [sessionManager ensureActive:true error:nil];
+    [sessionManager ensureActiveWithError:nil];
     [audioEngine restartAudioEngine];
   });
 }
