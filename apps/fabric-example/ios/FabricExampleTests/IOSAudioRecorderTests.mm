@@ -832,7 +832,7 @@ public:
   XCTAssertEqual(events.size(), 1U);
   XCTAssertEqual(events[0].previousSampleRate, 16000.0);
   XCTAssertEqual(events[0].sampleRate, 48000.0);
-  XCTAssertEqualObjects(NSStringFromStdString(events[0].reason), @"startup");
+  XCTAssertTrue(events[0].reason == InputRateChangeReason::Startup);
 }
 
 - (void)testStartArmsInputWhenLiveFormatCannotBeReadAgain {
@@ -863,7 +863,7 @@ public:
   XCTAssertEqual(events.size(), 1U);
   XCTAssertEqual(events[0].previousSampleRate, 16000.0);
   XCTAssertEqual(events[0].sampleRate, 48000.0);
-  XCTAssertEqualObjects(NSStringFromStdString(events[0].reason), @"measured");
+  XCTAssertTrue(events[0].reason == InputRateChangeReason::Measured);
 
   [self deliverInputAtRate:48000 seconds:5 hostTimeValid:YES];
   [self drainRateCorrections];
@@ -894,7 +894,42 @@ public:
   XCTAssertTrue(self.nativeRecorder.lastInputArmed);
   auto events = _registry->inputRateEvents();
   XCTAssertEqual(events.size(), 1U);
-  XCTAssertEqualObjects(NSStringFromStdString(events[0].reason), @"measured");
+  XCTAssertTrue(events[0].reason == InputRateChangeReason::Measured);
+}
+
+- (void)testRateChangeOfTakeStoppedDuringReprepareReportsNoEvent {
+  self.audioEngine.state = AudioEngineStateRunning;
+  self.nativeRecorder.mockResolvedInputFormat = [self stereoFormatAtRate:16000];
+  _recorder->setOnInputRateChangedCallback(7);
+  XCTAssertTrue(_recorder->start().is_ok());
+
+  FakeNativeAudioRecorder *nativeRecorder = self.nativeRecorder;
+  nativeRecorder.mockLiveInputFormat = [self stereoFormatAtRate:48000];
+  dispatch_semaphore_t reprepareParked = dispatch_semaphore_create(0);
+  dispatch_semaphore_t releaseParkedReprepare = dispatch_semaphore_create(0);
+  nativeRecorder.reprepareParked = reprepareParked;
+  nativeRecorder.releaseParkedReprepare = releaseParkedReprepare;
+  void (^notifyInput)(AudioEngineInputNotification) =
+      nativeRecorder.onInputNotification;
+  dispatch_group_t group = dispatch_group_create();
+  dispatch_group_async(
+      group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        notifyInput(AudioEngineInputNotificationHardwareChanged);
+      });
+  XCTAssertEqual(
+      dispatch_semaphore_wait(
+          reprepareParked, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)),
+      0);
+
+  // What stop() does before it waits for the lock the reprepare holds.
+  _recorder->setRecorderState(RecorderState::Idle);
+  dispatch_semaphore_signal(releaseParkedReprepare);
+
+  XCTAssertEqual(
+      dispatch_group_wait(group,
+                          dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)),
+      0);
+  XCTAssertEqual(_registry->inputRateEvents().size(), 0U);
 }
 
 - (void)testCorrectionQueuedBeforeRestartIsDroppedAndNextTakeCorrects {

@@ -96,17 +96,31 @@ struct AudioReadyPayload {
   }
 };
 
+/// Why a recorder now reads its input at a new sample rate.
+enum class InputRateChangeReason : uint8_t { Startup, Notification, Measured };
+
 struct InputRateChangedPayload {
   double previousSampleRate;
   double sampleRate;
-  /// "startup", "notification" or "measured".
-  std::string reason;
+  InputRateChangeReason reason;
+
+  static const char *reasonName(InputRateChangeReason reason) {
+    switch (reason) {
+      case InputRateChangeReason::Startup:
+        return "startup";
+      case InputRateChangeReason::Notification:
+        return "notification";
+      case InputRateChangeReason::Measured:
+        return "measured";
+    }
+    return "";
+  }
 
   facebook::jsi::Object toJsiObject(facebook::jsi::Runtime &rt) const {
     facebook::jsi::Object obj(rt);
     obj.setProperty(rt, "previousSampleRate", previousSampleRate);
     obj.setProperty(rt, "sampleRate", sampleRate);
-    obj.setProperty(rt, "reason", facebook::jsi::String::createFromUtf8(rt, reason));
+    obj.setProperty(rt, "reason", facebook::jsi::String::createFromUtf8(rt, reasonName(reason)));
     return obj;
   }
 };

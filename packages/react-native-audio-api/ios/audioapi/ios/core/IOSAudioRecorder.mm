@@ -137,10 +137,10 @@ void IOSAudioRecorder::handleHardwareChange()
   }
 
   std::scoped_lock hardwareChangeLock(hardwareChangeMutex_);
-  applyLiveInputFormatLocked("notification");
+  applyLiveInputFormatLocked(InputRateChangeReason::Notification);
 }
 
-void IOSAudioRecorder::applyLiveInputFormatLocked(const std::string &reason)
+void IOSAudioRecorder::applyLiveInputFormatLocked(InputRateChangeReason reason)
 {
   if (isIdle()) {
     return;
@@ -153,7 +153,7 @@ void IOSAudioRecorder::applyLiveInputFormatLocked(const std::string &reason)
 
   // A notification whose format can't be read yet waits for the next one, disarmed. start() has
   // no next one, and keeps the format it just resolved, so it arms anyway.
-  if (!didRefresh && reason != "startup") {
+  if (!didRefresh && reason != InputRateChangeReason::Startup) {
     return;
   }
 
@@ -170,8 +170,9 @@ void IOSAudioRecorder::applyLiveInputFormatLocked(const std::string &reason)
     return;
   }
 
+  // stop() stores Idle before taking the lock, so the take may have ended during the reprepare.
   const double sampleRate = [nativeRecorder_ getResolvedInputFormat].sampleRate;
-  if (sampleRate != previousSampleRate) {
+  if (sampleRate != previousSampleRate && !isIdle()) {
     reportInputRateChanged(previousSampleRate, sampleRate, reason);
   }
 }
@@ -221,7 +222,9 @@ void IOSAudioRecorder::handleMeasuredRateMismatch(double sampleRate, uint32_t la
     return;
   }
 
-  reportInputRateChanged(previousSampleRate, sampleRate, "measured");
+  if (!isIdle()) {
+    reportInputRateChanged(previousSampleRate, sampleRate, InputRateChangeReason::Measured);
+  }
 }
 
 Result<NoneType, std::string> IOSAudioRecorder::reprepareForLiveInput()
@@ -404,7 +407,7 @@ Result<NoneType, std::string> IOSAudioRecorder::start()
     state_.store(RecorderState::Recording, std::memory_order_release);
   }
 
-  applyLiveInputFormatLocked("startup");
+  applyLiveInputFormatLocked(InputRateChangeReason::Startup);
   return Ok(None);
 }
 

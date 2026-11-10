@@ -433,7 +433,7 @@ void AudioRecorder::clearOnInputRateChangedCallback() {
 void AudioRecorder::reportInputRateChanged(
     double previousSampleRate,
     double sampleRate,
-    const std::string &reason) {
+    InputRateChangeReason reason) {
   const uint64_t callbackId = inputRateChangedCallbackId_.load(std::memory_order_acquire);
 
   if (audioEventHandlerRegistry_ == nullptr || callbackId == 0) {

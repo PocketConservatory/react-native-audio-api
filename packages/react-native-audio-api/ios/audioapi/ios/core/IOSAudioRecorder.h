@@ -68,7 +68,7 @@ class IOSAudioRecorder : public AudioRecorder {
   /// the only place that arms the input outside a re-prepare, so it is armed only while the
   /// outputs match that format. Reports a sample-rate change with @p reason. The caller must hold
   /// `hardwareChangeMutex_`.
-  void applyLiveInputFormatLocked(const std::string &reason);
+  void applyLiveInputFormatLocked(InputRateChangeReason reason);
   /// Reads the input at the standard rate the audio thread measured, unless the label it was
   /// measured against has since changed or the take has used up its corrections.
   void handleMeasuredRateMismatch(double sampleRate, uint32_t labelGeneration);
