@@ -97,7 +97,7 @@ struct AudioReadyPayload {
 };
 
 /// Why a recorder now reads its input at a new sample rate.
-enum class InputRateChangeReason : uint8_t { Startup, Notification, Measured };
+enum class InputRateChangeReason : uint8_t { Startup, Notification };
 
 struct InputRateChangedPayload {
   double previousSampleRate;
@@ -110,8 +110,6 @@ struct InputRateChangedPayload {
         return "startup";
       case InputRateChangeReason::Notification:
         return "notification";
-      case InputRateChangeReason::Measured:
-        return "measured";
     }
     return "";
   }

@@ -948,13 +948,12 @@ interface OnRecorderErrorEventType {
 interface OnRecorderInputRateChangedEventType {
   previousSampleRate: number;
   sampleRate: number;
-  reason: 'startup' | 'notification' | 'measured';
+  reason: 'startup' | 'notification';
 }
 ```
 
 - `startup`: the input changed while the recording was starting.
 - `notification`: iOS reported a hardware change.
-- `measured`: frames arrived at a rate other than the one the recorder read them at, and iOS never reported it. The recorder corrects up to 3 times per recording; about 2 seconds of audio around such a change keep the old rate.
 
 #### OnAudioReadyEventType
 

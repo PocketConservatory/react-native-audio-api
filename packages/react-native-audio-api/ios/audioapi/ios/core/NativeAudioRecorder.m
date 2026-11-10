@@ -1,14 +1,6 @@
 #import <audioapi/ios/core/NativeAudioRecorder.h>
 #import <audioapi/ios/system/AudioEngine.h>
 
-@interface NativeAudioRecorder ()
-
-/// The rate the engine reports for input measured to run at `measuredSampleRate`; 0 when none.
-@property (nonatomic, assign) double staleSampleRate;
-@property (nonatomic, assign) double measuredSampleRate;
-
-@end
-
 @implementation NativeAudioRecorder
 
 static inline uint32_t nextPowerOfTwo(uint32_t x)
@@ -28,26 +20,9 @@ static inline uint32_t nextPowerOfTwo(uint32_t x)
   return x;
 }
 
-static AVAudioFormat *formatWithSampleRate(AVAudioFormat *format, double sampleRate)
-{
-  AudioStreamBasicDescription description = *format.streamDescription;
-  description.mSampleRate = sampleRate;
-  return [[AVAudioFormat alloc] initWithStreamDescription:&description
-                                            channelLayout:format.channelLayout];
-}
-
 - (AVAudioFormat *)readLiveInputFormat
 {
-  AVAudioFormat *liveFormat = [[AudioEngine sharedInstance] getLiveInputFormat];
-#if DEBUG
-  // QA only: makes the engine's reported input rate look stale for a whole take.
-  double forcedSampleRate =
-      [[NSUserDefaults standardUserDefaults] doubleForKey:@"AudioAPIDebugForceInputSampleRate"];
-  if (liveFormat != nil && forcedSampleRate > 0) {
-    return formatWithSampleRate(liveFormat, forcedSampleRate);
-  }
-#endif
-  return liveFormat;
+  return [[AudioEngine sharedInstance] getLiveInputFormat];
 }
 
 - (instancetype)initWithReceiverBlock:(AudioReceiverBlock)receiverBlock
@@ -69,7 +44,7 @@ static AVAudioFormat *formatWithSampleRate(AVAudioFormat *format, double sampleR
         return kAudioServicesNoError;
       }
 
-      weakSelf.receiverBlock(timestamp, inputData, frameCount);
+      weakSelf.receiverBlock(inputData, frameCount);
 
       return kAudioServicesNoError;
     };
@@ -86,9 +61,6 @@ static AVAudioFormat *formatWithSampleRate(AVAudioFormat *format, double sampleR
 - (void)storeResolvedInputFormat:(AVAudioFormat *)format
 {
   self.resolvedInputFormat = format;
-  if (format == nil) {
-    self.staleSampleRate = 0;
-  }
   self.resolvedBufferSize = format == nil ? 0 : [self getBufferSize];
   self.expectedBufferCount = format == nil ? 0 : (format.isInterleaved ? 1 : format.channelCount);
 }
@@ -119,14 +91,6 @@ static AVAudioFormat *formatWithSampleRate(AVAudioFormat *format, double sampleR
     return NO;
   }
 
-  if (self.staleSampleRate > 0) {
-    if (liveFormat.sampleRate == self.staleSampleRate) {
-      liveFormat = formatWithSampleRate(liveFormat, self.measuredSampleRate);
-    } else {
-      self.staleSampleRate = 0;
-    }
-  }
-
   AVAudioFormat *previousFormat = self.resolvedInputFormat;
   BOOL changed = previousFormat == nil || previousFormat.sampleRate != liveFormat.sampleRate ||
       previousFormat.channelCount != liveFormat.channelCount ||
@@ -139,20 +103,6 @@ static AVAudioFormat *formatWithSampleRate(AVAudioFormat *format, double sampleR
   }
 
   return YES;
-}
-
-- (void)overrideResolvedInputSampleRate:(double)sampleRate
-{
-  AVAudioFormat *format = self.resolvedInputFormat;
-  if (format == nil) {
-    return;
-  }
-
-  if (self.staleSampleRate == 0) {
-    self.staleSampleRate = format.sampleRate;
-  }
-  self.measuredSampleRate = sampleRate;
-  [self storeResolvedInputFormat:formatWithSampleRate(format, sampleRate)];
 }
 
 - (BOOL)start:(NSError **)error

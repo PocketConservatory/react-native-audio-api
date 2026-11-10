@@ -79,21 +79,14 @@ IOSAudioRecorder::IOSAudioRecorder(
     const AudioRecorderOptions &options)
     : AudioRecorder(audioEventHandlerRegistry)
 {
-  mach_timebase_info(&hostTimebase_);
-  rateCorrectionQueue_ = dispatch_queue_create(
-      "com.swmansion.audioapi.recorder-rate-correction", DISPATCH_QUEUE_SERIAL);
+  AudioReceiverBlock receiverBlock = ^(const AudioBufferList *inputBuffer, int numFrames) {
+    const float *channels[MAX_CHANNEL_COUNT];
+    if (!collectPlanarInputChannels(inputBuffer, numFrames, inputChannelCount_, channels)) {
+      return;
+    }
 
-  AudioReceiverBlock receiverBlock =
-      ^(const AudioTimeStamp *timestamp, const AudioBufferList *inputBuffer, int numFrames) {
-        monitorInputRate(timestamp, numFrames);
-
-        const float *channels[MAX_CHANNEL_COUNT];
-        if (!collectPlanarInputChannels(inputBuffer, numFrames, inputChannelCount_, channels)) {
-          return;
-        }
-
-        onAudioFrames(channels, numFrames);
-      };
+    onAudioFrames(channels, numFrames);
+  };
 
   nativeRecorder_ = [[NativeAudioRecorder alloc] initWithReceiverBlock:receiverBlock
                                                 voiceProcessingEnabled:options.iosVoiceProcessing];
@@ -177,56 +170,6 @@ void IOSAudioRecorder::applyLiveInputFormatLocked(InputRateChangeReason reason)
   }
 }
 
-void IOSAudioRecorder::monitorInputRate(const AudioTimeStamp *timestamp, int numFrames)
-{
-  // mSampleTime ticks at the labelled rate, so only host time can tell the real one.
-  if (timestamp == nullptr || (timestamp->mFlags & kAudioTimeStampHostTimeValid) == 0 ||
-      numFrames <= 0) {
-    return;
-  }
-
-  const uint64_t hostNanos = timestamp->mHostTime * hostTimebase_.numer / hostTimebase_.denom;
-  const auto measuredRate = inputRateMonitor_.feed(hostNanos, static_cast<uint32_t>(numFrames));
-  if (!measuredRate.has_value() ||
-      rateCorrectionPending_.exchange(true, std::memory_order_acq_rel)) {
-    return;
-  }
-
-  const double sampleRate = *measuredRate;
-  const uint32_t labelGeneration = inputRateMonitor_.measuredGeneration();
-  std::shared_ptr<std::atomic<bool>> alive = alive_;
-  dispatch_async(rateCorrectionQueue_, ^{
-    if (alive->load(std::memory_order_acquire)) {
-      handleMeasuredRateMismatch(sampleRate, labelGeneration);
-    }
-  });
-}
-
-void IOSAudioRecorder::handleMeasuredRateMismatch(double sampleRate, uint32_t labelGeneration)
-{
-  std::scoped_lock hardwareChangeLock(hardwareChangeMutex_);
-  rateCorrectionPending_.store(false, std::memory_order_release);
-
-  if (isIdle() || isPaused() || labelGeneration != inputRateMonitor_.generation() ||
-      measuredCorrectionCount_ >= MAX_MEASURED_CORRECTIONS_PER_TAKE) {
-    return;
-  }
-
-  const double previousSampleRate = [nativeRecorder_ getResolvedInputFormat].sampleRate;
-  [nativeRecorder_ overrideResolvedInputSampleRate:sampleRate];
-  measuredCorrectionCount_ += 1;
-
-  auto result = reprepareForLiveInput();
-  if (result.is_err()) {
-    reportError("iOS recorder error: " + result.unwrap_err());
-    return;
-  }
-
-  if (!isIdle()) {
-    reportInputRateChanged(previousSampleRate, sampleRate, InputRateChangeReason::Measured);
-  }
-}
-
 Result<NoneType, std::string> IOSAudioRecorder::reprepareForLiveInput()
 {
   if (isIdle()) {
@@ -255,7 +198,6 @@ Result<NoneType, std::string> IOSAudioRecorder::reprepareForLiveInput()
   }
 
   streamSampleRate_.store(format.layout.sampleRate, std::memory_order_release);
-  inputRateMonitor_.setLabelledRate(format.layout.sampleRate);
 
   if (shouldArmInput) {
     [nativeRecorder_ setInputArmed:true];
@@ -266,9 +208,6 @@ Result<NoneType, std::string> IOSAudioRecorder::reprepareForLiveInput()
 
 IOSAudioRecorder::~IOSAudioRecorder()
 {
-  alive_->store(false, std::memory_order_release);
-  // Waits out a correction that passed its alive check before this store.
-  dispatch_sync(rateCorrectionQueue_, ^{});
   stop();
 
   nativeRecorder_.onInputNotification = nil;
@@ -401,9 +340,6 @@ Result<NoneType, std::string> IOSAudioRecorder::start()
       prepareAdapterNode(streamFormat);
     }
 
-    rateCorrectionPending_.store(false, std::memory_order_release);
-    measuredCorrectionCount_ = 0;
-    inputRateMonitor_.setLabelledRate(streamFormat.layout.sampleRate);
     state_.store(RecorderState::Recording, std::memory_order_release);
   }
 
@@ -429,7 +365,6 @@ Result<FileInfo, std::string> IOSAudioRecorder::stop()
     inputChannelCount_ = 0;
     lastCallbackFrameCount_.store(0, std::memory_order_release);
     streamSampleRate_.store(0.0F, std::memory_order_release);
-    inputRateMonitor_.setLabelledRate(0.0F);
   }
   [nativeRecorder_ stop];
 
@@ -449,7 +384,6 @@ void IOSAudioRecorder::pause()
     return;
   }
 
-  inputRateMonitor_.restartMeasurement();
   [nativeRecorder_ pause];
 }
 
@@ -472,7 +406,6 @@ void IOSAudioRecorder::resume()
   }
 
   markResumed();
-  inputRateMonitor_.restartMeasurement();
   handleHardwareChange();
 }
 

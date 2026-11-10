@@ -38,14 +38,9 @@ export interface OnRecorderErrorEventType {
 
 /**
  * Why the recorder now reads its input at a new sample rate: the rate changed
- * while the recording was starting, iOS reported a hardware change, or the
- * recorder measured that frames arrive at a rate other than the one it was
- * reading them at.
+ * while the recording was starting, or iOS reported a hardware change.
  */
-export type RecorderInputRateChangeReason =
-  | 'startup'
-  | 'notification'
-  | 'measured';
+export type RecorderInputRateChangeReason = 'startup' | 'notification';
 
 export interface OnRecorderInputRateChangedEventType {
   previousSampleRate: number;
