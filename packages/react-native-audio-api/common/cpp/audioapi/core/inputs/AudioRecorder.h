@@ -40,6 +40,8 @@ class AudioRecorder {
   Result<NoneType, std::string> enableFileOutput(std::shared_ptr<AudioFileProperties> properties);
   void disableFileOutput();
 
+  /// @brief Pauses a recording session. A no-op when the recorder is idle or already paused;
+  /// callers need not check the state.
   virtual void pause() = 0;
   /// @brief Resumes a paused recording.
   /// @return The platform's reason when it refused; Ok when the recorder resumed or was not
@@ -126,6 +128,11 @@ class AudioRecorder {
   /// until the next start(). Nothing may deliver frames in the old format once this runs.
   /// The caller must hold callbackMutex_, fileWriterMutex_ and adapterNodeMutex_.
   Result<NoneType, std::string> reprepareOutputs(const StreamFormat &format);
+
+  /// @brief Moves a recording session to Paused. A pause acts on the session state, not the
+  /// stream's transient state, so it also lands while the stream is starting or restarting.
+  /// @return Whether the session was recording and is now paused.
+  bool markPaused();
 
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
