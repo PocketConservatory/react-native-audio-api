@@ -42,6 +42,8 @@ AudioRecorderHostObject::AudioRecorderHostObject(
       JSI_EXPORT_FUNCTION(AudioRecorderHostObject, clearOnAudioReady),
       JSI_EXPORT_FUNCTION(AudioRecorderHostObject, setOnError),
       JSI_EXPORT_FUNCTION(AudioRecorderHostObject, clearOnError),
+      JSI_EXPORT_FUNCTION(AudioRecorderHostObject, setOnInputRateChanged),
+      JSI_EXPORT_FUNCTION(AudioRecorderHostObject, clearOnInputRateChanged),
       JSI_EXPORT_FUNCTION(AudioRecorderHostObject, getCurrentDuration));
 
   addGetters(JSI_EXPORT_PROPERTY_GETTER(AudioRecorderHostObject, inputLatency));
@@ -239,6 +241,21 @@ JSI_HOST_FUNCTION_IMPL(AudioRecorderHostObject, setOnError) {
 
 JSI_HOST_FUNCTION_IMPL(AudioRecorderHostObject, clearOnError) {
   audioRecorder_->clearOnErrorCallback();
+  return jsi::Value::undefined();
+}
+
+JSI_HOST_FUNCTION_IMPL(AudioRecorderHostObject, setOnInputRateChanged) {
+  auto options = args[0].getObject(runtime);
+
+  uint64_t callbackId =
+      std::stoull(options.getProperty(runtime, "callbackId").getString(runtime).utf8(runtime));
+
+  audioRecorder_->setOnInputRateChangedCallback(callbackId);
+  return jsi::Value::undefined();
+}
+
+JSI_HOST_FUNCTION_IMPL(AudioRecorderHostObject, clearOnInputRateChanged) {
+  audioRecorder_->clearOnInputRateChangedCallback();
   return jsi::Value::undefined();
 }
 

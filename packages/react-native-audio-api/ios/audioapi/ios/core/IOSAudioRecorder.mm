@@ -130,12 +130,27 @@ void IOSAudioRecorder::handleHardwareChange()
   }
 
   std::scoped_lock hardwareChangeLock(hardwareChangeMutex_);
-  BOOL formatChanged = NO;
-  if (![nativeRecorder_ refreshResolvedInputFormatReturningChanged:&formatChanged]) {
+  applyLiveInputFormatLocked(InputRateChangeReason::Notification);
+}
+
+void IOSAudioRecorder::applyLiveInputFormatLocked(InputRateChangeReason reason)
+{
+  if (isIdle()) {
     return;
   }
 
-  if (!formatChanged) {
+  const double previousSampleRate = [nativeRecorder_ getResolvedInputFormat].sampleRate;
+  BOOL formatChanged = NO;
+  const BOOL didRefresh =
+      [nativeRecorder_ refreshResolvedInputFormatReturningChanged:&formatChanged];
+
+  // A notification whose format can't be read yet waits for the next one, disarmed. start() has
+  // no next one, and keeps the format it just resolved, so it arms anyway.
+  if (!didRefresh && reason != InputRateChangeReason::Startup) {
+    return;
+  }
+
+  if (!didRefresh || !formatChanged) {
     if (state_.load(std::memory_order_acquire) == RecorderState::Recording) {
       [nativeRecorder_ setInputArmed:true];
     }
@@ -145,6 +160,13 @@ void IOSAudioRecorder::handleHardwareChange()
   auto result = reprepareForLiveInput();
   if (result.is_err()) {
     reportError("iOS recorder error: " + result.unwrap_err());
+    return;
+  }
+
+  // stop() stores Idle before taking the lock, so the take may have ended during the reprepare.
+  const double sampleRate = [nativeRecorder_ getResolvedInputFormat].sampleRate;
+  if (sampleRate != previousSampleRate && !isIdle()) {
+    reportInputRateChanged(previousSampleRate, sampleRate, reason);
   }
 }
 
@@ -211,114 +233,117 @@ Result<NoneType, std::string> IOSAudioRecorder::start()
   }
 
   std::scoped_lock hardwareChangeLock(hardwareChangeMutex_);
-  std::scoped_lock startLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
-  AudioSessionManager *audioSessionManager = [AudioSessionManager sharedInstance];
+  {
+    std::scoped_lock startLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+    AudioSessionManager *audioSessionManager = [AudioSessionManager sharedInstance];
 
-  if ([[audioSessionManager checkRecordingPermissions] isEqual:@"Denied"]) {
-    return Err("Microphone permissions are not granted");
-  }
-
-  NSError *nativeStartError = nil;
-  BOOL didStartNativeRecorder = NO;
-
-  @try {
-    didStartNativeRecorder = [nativeRecorder_ start:&nativeStartError];
-  } @catch (NSException *exception) {
-    cleanupStartedRecorder(nativeRecorder_, fileWriter_, false);
-
-    std::string message = "Failed to start native recorder";
-    message += ": exception={name=";
-    message += [[exception.name description] UTF8String];
-    message += ", reason=";
-    message += [[(exception.reason ?: @"<none>") description] UTF8String];
-    message += "}; ";
-    message += [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
-
-#if TARGET_OS_SIMULATOR
-    message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
-#endif
-
-    return Err(message);
-  }
-
-  if (!didStartNativeRecorder) {
-    std::string message = "Failed to start native recorder";
-
-    if (nativeStartError != nil) {
-      message += ": ";
-      message += [[nativeStartError debugDescription] UTF8String];
+    if ([[audioSessionManager checkRecordingPermissions] isEqual:@"Denied"]) {
+      return Err("Microphone permissions are not granted");
     }
 
-    message += "; ";
-    message += [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
+    NSError *nativeStartError = nil;
+    BOOL didStartNativeRecorder = NO;
 
-#if TARGET_OS_SIMULATOR
-    message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
-#endif
-
-    return Err(message);
-  }
-
-  auto formatResult = resolveStreamFormat();
-
-  if (!formatResult.is_ok()) {
-    std::string message = "Audio input format is unavailable. " +
-        describeRecorderFormat([nativeRecorder_ getResolvedInputFormat]) + "; " +
-        [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
-#if TARGET_OS_SIMULATOR
-    message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
-#endif
-
-    cleanupStartedRecorder(nativeRecorder_, fileWriter_, false);
-    return Err(message);
-  }
-
-  const auto streamFormat = formatResult.unwrap();
-  streamSampleRate_.store(streamFormat.layout.sampleRate, std::memory_order_release);
-
-  // The audio thread reads these before taking any consumer mutex, so they may only be
-  // touched while the input is disarmed — i.e. here and in stop().
-  inputChannelCount_ = streamFormat.layout.channelCount;
-  lastCallbackFrameCount_.store(0, std::memory_order_release);
-  bool fileWasOpened = false;
-
-  if (wantsFileOutput()) {
-    auto writerResult = setupFileWriter(fileProperties_);
-    if (!writerResult.is_ok()) {
+    @try {
+      didStartNativeRecorder = [nativeRecorder_ start:&nativeStartError];
+    } @catch (NSException *exception) {
       cleanupStartedRecorder(nativeRecorder_, fileWriter_, false);
-      return Err(writerResult.unwrap_err());
-    }
-    fileWasOpened = true;
-  }
 
-  if (wantsCallback()) {
-    if (dataCallback_ == nullptr) {
-      cleanupStartedRecorder(nativeRecorder_, fileWriter_, fileWasOpened);
-      deactivate(fileOutputState_);
-      fileWriter_ = nullptr;
-      return Err("Failed to prepare callback: callback is unavailable");
-    }
+      std::string message = "Failed to start native recorder";
+      message += ": exception={name=";
+      message += [[exception.name description] UTF8String];
+      message += ", reason=";
+      message += [[(exception.reason ?: @"<none>") description] UTF8String];
+      message += "}; ";
+      message += [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
 
-    dataCallback_->setOnErrorCallback(errorCallbackId_.load(std::memory_order_acquire));
-    auto callbackResult = dataCallback_->prepare(streamFormat);
+#if TARGET_OS_SIMULATOR
+      message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
+#endif
 
-    if (callbackResult.is_err()) {
-      cleanupStartedRecorder(nativeRecorder_, fileWriter_, fileWasOpened);
-      deactivate(callbackOutputState_);
-      deactivate(fileOutputState_);
-      fileWriter_ = nullptr;
-      return Err("Failed to prepare callback: " + callbackResult.unwrap_err());
+      return Err(message);
     }
 
-    callbackOutputState_.store(OutputState::Active, std::memory_order_release);
+    if (!didStartNativeRecorder) {
+      std::string message = "Failed to start native recorder";
+
+      if (nativeStartError != nil) {
+        message += ": ";
+        message += [[nativeStartError debugDescription] UTF8String];
+      }
+
+      message += "; ";
+      message += [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
+
+#if TARGET_OS_SIMULATOR
+      message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
+#endif
+
+      return Err(message);
+    }
+
+    auto formatResult = resolveStreamFormat();
+
+    if (!formatResult.is_ok()) {
+      std::string message = "Audio input format is unavailable. " +
+          describeRecorderFormat([nativeRecorder_ getResolvedInputFormat]) + "; " +
+          [[audioSessionManager inputDiagnosticsSnapshot] UTF8String];
+#if TARGET_OS_SIMULATOR
+      message += "; simulatorHint={Select a host microphone in Simulator > I/O > Audio Input}";
+#endif
+
+      cleanupStartedRecorder(nativeRecorder_, fileWriter_, false);
+      return Err(message);
+    }
+
+    const auto streamFormat = formatResult.unwrap();
+    streamSampleRate_.store(streamFormat.layout.sampleRate, std::memory_order_release);
+
+    // The audio thread reads these before taking any consumer mutex, so they may only be
+    // touched while the input is disarmed — i.e. here and in stop().
+    inputChannelCount_ = streamFormat.layout.channelCount;
+    lastCallbackFrameCount_.store(0, std::memory_order_release);
+    bool fileWasOpened = false;
+
+    if (wantsFileOutput()) {
+      auto writerResult = setupFileWriter(fileProperties_);
+      if (!writerResult.is_ok()) {
+        cleanupStartedRecorder(nativeRecorder_, fileWriter_, false);
+        return Err(writerResult.unwrap_err());
+      }
+      fileWasOpened = true;
+    }
+
+    if (wantsCallback()) {
+      if (dataCallback_ == nullptr) {
+        cleanupStartedRecorder(nativeRecorder_, fileWriter_, fileWasOpened);
+        deactivate(fileOutputState_);
+        fileWriter_ = nullptr;
+        return Err("Failed to prepare callback: callback is unavailable");
+      }
+
+      dataCallback_->setOnErrorCallback(errorCallbackId_.load(std::memory_order_acquire));
+      auto callbackResult = dataCallback_->prepare(streamFormat);
+
+      if (callbackResult.is_err()) {
+        cleanupStartedRecorder(nativeRecorder_, fileWriter_, fileWasOpened);
+        deactivate(callbackOutputState_);
+        deactivate(fileOutputState_);
+        fileWriter_ = nullptr;
+        return Err("Failed to prepare callback: " + callbackResult.unwrap_err());
+      }
+
+      callbackOutputState_.store(OutputState::Active, std::memory_order_release);
+    }
+
+    if (wantsConnection()) {
+      prepareAdapterNode(streamFormat);
+    }
+
+    state_.store(RecorderState::Recording, std::memory_order_release);
   }
 
-  if (wantsConnection()) {
-    prepareAdapterNode(streamFormat);
-  }
-
-  [nativeRecorder_ setInputArmed:true];
-  state_.store(RecorderState::Recording, std::memory_order_release);
+  applyLiveInputFormatLocked(InputRateChangeReason::Startup);
   return Ok(None);
 }
 
@@ -332,10 +357,15 @@ Result<FileInfo, std::string> IOSAudioRecorder::stop()
   }
 
   state_.store(RecorderState::Idle, std::memory_order_release);
-  [nativeRecorder_ setInputArmed:false];
-  inputChannelCount_ = 0;
-  lastCallbackFrameCount_.store(0, std::memory_order_release);
-  streamSampleRate_.store(0.0F, std::memory_order_release);
+  {
+    // Waits out a handler that could re-arm the input; later ones see Idle under the lock.
+    // Released before the native stop, which restarts the engine.
+    std::scoped_lock hardwareChangeLock(hardwareChangeMutex_);
+    [nativeRecorder_ setInputArmed:false];
+    inputChannelCount_ = 0;
+    lastCallbackFrameCount_.store(0, std::memory_order_release);
+    streamSampleRate_.store(0.0F, std::memory_order_release);
+  }
   [nativeRecorder_ stop];
 
   {

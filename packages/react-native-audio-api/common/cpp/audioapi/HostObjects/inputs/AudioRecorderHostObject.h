@@ -45,6 +45,9 @@ class AudioRecorderHostObject : public HostObject {
   JSI_HOST_FUNCTION_DECL(setOnError);
   JSI_HOST_FUNCTION_DECL(clearOnError);
 
+  JSI_HOST_FUNCTION_DECL(setOnInputRateChanged);
+  JSI_HOST_FUNCTION_DECL(clearOnInputRateChanged);
+
   JSI_HOST_FUNCTION_DECL(getCurrentDuration);
 
   JSI_PROPERTY_GETTER_DECL(inputLatency);

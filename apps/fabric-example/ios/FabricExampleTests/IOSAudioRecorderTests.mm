@@ -21,6 +21,7 @@
 
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -64,6 +65,28 @@ public:
 private:
   /// Only a binding target for the producers handed out above.
   moodycamel::ConcurrentQueue<int> producerQueue_;
+};
+
+/// Keeps every input-rate event the recorder dispatches.
+class RecordingAudioEventHandlerRegistry : public FakeAudioEventHandlerRegistry {
+public:
+  bool dispatchEvent(AudioEvent eventName, uint64_t listenerId,
+                     AudioEventPayload &&payload) noexcept override {
+    if (eventName == AudioEvent::RECORDER_INPUT_RATE_CHANGED) {
+      std::scoped_lock lock(mutex_);
+      inputRateEvents_.push_back(std::get<InputRateChangedPayload>(payload));
+    }
+    return true;
+  }
+
+  std::vector<InputRateChangedPayload> inputRateEvents() {
+    std::scoped_lock lock(mutex_);
+    return inputRateEvents_;
+  }
+
+private:
+  std::mutex mutex_;
+  std::vector<InputRateChangedPayload> inputRateEvents_;
 };
 
 struct RecorderAdapterTestFixture {
@@ -154,6 +177,10 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
 
 @end
 
+@interface NativeAudioRecorder (LiveInputFormat)
+- (AVAudioFormat *)readLiveInputFormat;
+@end
+
 @interface FakeNativeAudioRecorder : NativeAudioRecorder
 
 @property(nonatomic, strong) id mockResolvedInputFormat;
@@ -170,6 +197,10 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
 @property(nonatomic, assign) BOOL lastInputArmed;
 @property(nonatomic, assign) BOOL throwsOnStart;
 @property(nonatomic, strong) NSException *startException;
+/// The format the engine reports on refresh; the resolved format when nil.
+@property(atomic, strong) AVAudioFormat *mockLiveInputFormat;
+/// The engine reports no live input format at all.
+@property(atomic, assign) BOOL liveInputFormatUnavailable;
 /// Refreshing reports a format change the first time and none afterwards.
 @property(atomic, assign) BOOL reportsFormatChangeOnFirstRefresh;
 @property(atomic, assign) NSInteger refreshCallCount;
@@ -222,7 +253,11 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
 
 - (BOOL)refreshResolvedInputFormatReturningChanged:(BOOL *)formatChanged {
   if (!self.reportsFormatChangeOnFirstRefresh) {
-    return [super refreshResolvedInputFormatReturningChanged:formatChanged];
+    self.resolvedInputFormat = (AVAudioFormat *)self.mockResolvedInputFormat;
+    BOOL refreshed =
+        [super refreshResolvedInputFormatReturningChanged:formatChanged];
+    self.mockResolvedInputFormat = self.resolvedInputFormat;
+    return refreshed;
   }
 
   @synchronized(self) {
@@ -230,6 +265,14 @@ static RecorderAdapterTestFixture makeRecorderAdapterFixture() {
     *formatChanged = self.refreshCallCount == 1;
   }
   return YES;
+}
+
+- (AVAudioFormat *)readLiveInputFormat {
+  if (self.liveInputFormatUnavailable) {
+    return nil;
+  }
+  return self.mockLiveInputFormat
+             ?: (AVAudioFormat *)self.mockResolvedInputFormat;
 }
 
 - (BOOL)start:(NSError **)error {
@@ -335,6 +378,7 @@ public:
 @interface IOSAudioRecorderTests : XCTestCase {
 @private
   std::unique_ptr<TestableIOSAudioRecorder> _recorder;
+  std::shared_ptr<RecordingAudioEventHandlerRegistry> _registry;
 }
 
 @property(nonatomic, strong) FakeIOSRecorderAudioEngine *audioEngine;
@@ -353,7 +397,8 @@ public:
   self.audioEngine = [[FakeIOSRecorderAudioEngine alloc] init];
   self.nativeRecorder = [[FakeNativeAudioRecorder alloc] init];
 
-  _recorder = std::make_unique<TestableIOSAudioRecorder>(std::shared_ptr<IAudioEventHandlerRegistry>());
+  _registry = std::make_shared<RecordingAudioEventHandlerRegistry>();
+  _recorder = std::make_unique<TestableIOSAudioRecorder>(_registry);
   self.originalNativeRecorder = _recorder->replaceNativeRecorder(self.nativeRecorder);
   self.nativeRecorder.onInputNotification = self.originalNativeRecorder.onInputNotification;
 }
@@ -712,6 +757,92 @@ public:
                           dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)),
       0);
   XCTAssertEqual(_recorder->streamSampleRate(), 48000.0F);
+}
+
+- (AVAudioFormat *)stereoFormatAtRate:(double)sampleRate {
+  return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:sampleRate
+                                                        channels:2];
+}
+
+- (void)testLiveFormatChangeAfterNativeStartIsAppliedWithStartupEvent {
+  self.audioEngine.state = AudioEngineStateRunning;
+  self.nativeRecorder.mockResolvedInputFormat = [self stereoFormatAtRate:16000];
+  self.nativeRecorder.mockLiveInputFormat = [self stereoFormatAtRate:48000];
+  _recorder->setOnInputRateChangedCallback(7);
+
+  XCTAssertTrue(_recorder->start().is_ok());
+
+  XCTAssertEqual(_recorder->streamSampleRate(), 48000.0F);
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
+  auto events = _registry->inputRateEvents();
+  XCTAssertEqual(events.size(), 1U);
+  XCTAssertEqual(events[0].previousSampleRate, 16000.0);
+  XCTAssertEqual(events[0].sampleRate, 48000.0);
+  XCTAssertTrue(events[0].reason == InputRateChangeReason::Startup);
+}
+
+- (void)testStartArmsInputWhenLiveFormatCannotBeReadAgain {
+  self.audioEngine.state = AudioEngineStateRunning;
+  self.nativeRecorder.mockResolvedInputFormat = [self stereoFormatAtRate:16000];
+  self.nativeRecorder.liveInputFormatUnavailable = YES;
+  _recorder->setOnInputRateChangedCallback(7);
+
+  XCTAssertTrue(_recorder->start().is_ok());
+
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
+  XCTAssertEqual(_recorder->streamSampleRate(), 16000.0F);
+  XCTAssertEqual(_registry->inputRateEvents().size(), 0U);
+}
+
+- (void)testRateChangeOfTakeStoppedDuringReprepareReportsNoEvent {
+  self.audioEngine.state = AudioEngineStateRunning;
+  self.nativeRecorder.mockResolvedInputFormat = [self stereoFormatAtRate:16000];
+  _recorder->setOnInputRateChangedCallback(7);
+  XCTAssertTrue(_recorder->start().is_ok());
+
+  FakeNativeAudioRecorder *nativeRecorder = self.nativeRecorder;
+  nativeRecorder.mockLiveInputFormat = [self stereoFormatAtRate:48000];
+  dispatch_semaphore_t reprepareParked = dispatch_semaphore_create(0);
+  dispatch_semaphore_t releaseParkedReprepare = dispatch_semaphore_create(0);
+  nativeRecorder.reprepareParked = reprepareParked;
+  nativeRecorder.releaseParkedReprepare = releaseParkedReprepare;
+  void (^notifyInput)(AudioEngineInputNotification) =
+      nativeRecorder.onInputNotification;
+  dispatch_group_t group = dispatch_group_create();
+  dispatch_group_async(
+      group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        notifyInput(AudioEngineInputNotificationHardwareChanged);
+      });
+  XCTAssertEqual(
+      dispatch_semaphore_wait(
+          reprepareParked, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)),
+      0);
+
+  // What stop() does before it waits for the lock the reprepare holds.
+  _recorder->setRecorderState(RecorderState::Idle);
+  dispatch_semaphore_signal(releaseParkedReprepare);
+
+  XCTAssertEqual(
+      dispatch_group_wait(group,
+                          dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)),
+      0);
+  XCTAssertEqual(_registry->inputRateEvents().size(), 0U);
+}
+
+- (void)testChannelCountChangeAloneReportsNoInputRateEvent {
+  self.audioEngine.state = AudioEngineStateRunning;
+  self.nativeRecorder.mockResolvedInputFormat = [self stereoFormatAtRate:44100];
+  _recorder->setOnInputRateChangedCallback(7);
+  XCTAssertTrue(_recorder->start().is_ok());
+
+  self.nativeRecorder.mockLiveInputFormat =
+      [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:1];
+  self.nativeRecorder.onInputNotification(
+      AudioEngineInputNotificationHardwareChanged);
+
+  XCTAssertEqual(self.nativeRecorder.getResolvedInputFormat.channelCount, 1U);
+  XCTAssertTrue(self.nativeRecorder.lastInputArmed);
+  XCTAssertEqual(_registry->inputRateEvents().size(), 0U);
 }
 
 - (void)testStopReturnsErrorWhileIdle {

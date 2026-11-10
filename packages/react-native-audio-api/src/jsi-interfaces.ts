@@ -377,6 +377,9 @@ export interface IAudioRecorder {
   setOnError: (options: { callbackId: string }) => void;
   clearOnError: () => void;
 
+  setOnInputRateChanged: (options: { callbackId: string }) => void;
+  clearOnInputRateChanged: () => void;
+
   getCurrentDuration: () => number;
   getFilePath: () => string | null;
 

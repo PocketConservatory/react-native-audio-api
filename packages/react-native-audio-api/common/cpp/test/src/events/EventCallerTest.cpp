@@ -19,6 +19,7 @@ static_assert(EventPayloadFor<AudioEvent::CONTEXT_ERROR, EmptyPayload>);
 static_assert(EventPayloadFor<AudioEvent::POSITION_CHANGED, DoubleValuePayload>);
 static_assert(EventPayloadFor<AudioEvent::RECORDER_ERROR, StringPayload>);
 static_assert(EventPayloadFor<AudioEvent::BUFFERING_STATE_CHANGE, BoolValuePayload>);
+static_assert(EventPayloadFor<AudioEvent::RECORDER_INPUT_RATE_CHANGED, InputRateChangedPayload>);
 static_assert(!EventPayloadFor<AudioEvent::ENDED, StringPayload>);
 static_assert(!EventPayloadFor<AudioEvent::RECORDER_ERROR, EmptyPayload>);
 static_assert(!EventPayloadFor<AudioEvent::BUFFERING_STATE_CHANGE, EmptyPayload>);

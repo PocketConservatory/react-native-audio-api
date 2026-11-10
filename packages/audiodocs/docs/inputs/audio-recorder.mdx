@@ -639,6 +639,42 @@ export default MyRecorder;
       </td>
     </tr>
 
+<!-- -->
+
+    <tr>
+      <td><div class="text-content">
+        ##### onInputRateChanged <IOS />
+      </div></td>
+      <td>
+        <div class="text-content">
+          Sets a callback for when the recorder starts reading its input at a new sample rate during a recording, so the recording keeps its real speed. It fires only when the sample rate actually changed.
+
+          For details, see [OnRecorderInputRateChangedEventType](#onrecorderinputratechangedeventtype).
+        </div>
+        ```tsx
+          audioRecorder.onInputRateChanged((event: OnRecorderInputRateChangedEventType) => {
+            console.log(event.previousSampleRate, event.sampleRate, event.reason);
+          });
+        ```
+      </td>
+    </tr>
+
+<!-- -->
+
+    <tr>
+      <td><div class="text-content">
+        ##### clearOnInputRateChanged
+      </div></td>
+      <td>
+        <div class="text-content">
+          Removes the input rate callback.
+        </div>
+        ```tsx
+          audioRecorder.clearOnInputRateChanged();
+        ```
+      </td>
+    </tr>
+
   </tbody>
 </table>
 
@@ -905,6 +941,19 @@ interface OnRecorderErrorEventType {
   message: string;
 }
 ```
+
+#### OnRecorderInputRateChangedEventType
+
+```tsx
+interface OnRecorderInputRateChangedEventType {
+  previousSampleRate: number;
+  sampleRate: number;
+  reason: 'startup' | 'notification';
+}
+```
+
+- `startup`: the input changed while the recording was starting.
+- `notification`: iOS reported a hardware change.
 
 #### OnAudioReadyEventType
 

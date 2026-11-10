@@ -420,6 +420,33 @@ void AudioRecorder::reportError(const std::string &message) {
       AudioEvent::RECORDER_ERROR, callbackId, StringPayload{.name = "message", .reason = message});
 }
 
+/// JS thread only.
+void AudioRecorder::setOnInputRateChangedCallback(uint64_t callbackId) {
+  inputRateChangedCallbackId_.store(callbackId, std::memory_order_release);
+}
+
+/// JS thread only.
+void AudioRecorder::clearOnInputRateChangedCallback() {
+  inputRateChangedCallbackId_.store(0, std::memory_order_release);
+}
+
+void AudioRecorder::reportInputRateChanged(
+    double previousSampleRate,
+    double sampleRate,
+    InputRateChangeReason reason) {
+  const uint64_t callbackId = inputRateChangedCallbackId_.load(std::memory_order_acquire);
+
+  if (audioEventHandlerRegistry_ == nullptr || callbackId == 0) {
+    return;
+  }
+
+  audioEventHandlerRegistry_->dispatchEvent(
+      AudioEvent::RECORDER_INPUT_RATE_CHANGED,
+      callbackId,
+      InputRateChangedPayload{
+          .previousSampleRate = previousSampleRate, .sampleRate = sampleRate, .reason = reason});
+}
+
 bool AudioRecorder::markPaused() {
   auto expected = RecorderState::Recording;
   return state_.compare_exchange_strong(

@@ -32,5 +32,6 @@ enum class AudioEvent : uint8_t {
   RECORDING_NOTIFICATION_STOP,
   STATE_CHANGE,
   CONTEXT_ERROR,
+  RECORDER_INPUT_RATE_CHANGED,
 };
 } // namespace audioapi
