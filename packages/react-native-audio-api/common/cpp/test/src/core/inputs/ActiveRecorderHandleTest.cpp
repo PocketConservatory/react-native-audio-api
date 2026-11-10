@@ -33,6 +33,7 @@ class FakeAudioRecorder : public AudioRecorder {
   std::vector<std::string> stopPaths{"file:///tmp/recording.m4a"};
   std::atomic<int> stopCount{0};
   std::optional<std::string> resumeError;
+  bool streamReconnecting = false;
 
   Result<NoneType, std::string> start() override {
     if (state_ != RecorderState::Idle) {
@@ -53,7 +54,7 @@ class FakeAudioRecorder : public AudioRecorder {
   }
 
   void pause() override {
-    state_ = RecorderState::Paused;
+    markPaused();
   }
   Result<NoneType, std::string> resume() override {
     if (state_ != RecorderState::Paused) {
@@ -69,8 +70,9 @@ class FakeAudioRecorder : public AudioRecorder {
     return Result<NoneType, std::string>::Ok(None);
   }
 
+  // Mirrors AndroidAudioRecorder, whose isRecording() also requires a live stream.
   bool isRecording() const override {
-    return state_ == RecorderState::Recording;
+    return state_ == RecorderState::Recording && !streamReconnecting;
   }
   bool isPaused() const override {
     return state_ == RecorderState::Paused;
@@ -144,6 +146,28 @@ TEST(ActiveRecorderHandleTest, PauseAndResumeActOnlyInMatchingStates) {
   EXPECT_EQ(handle.pause(), RecorderState::Paused);
   EXPECT_EQ(handle.resume(), RecorderState::Recording);
   EXPECT_TRUE(recorder->isRecording());
+}
+
+TEST(ActiveRecorderHandleTest, PauseReachesRecorderWhoseStreamIsReconnecting) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  recorder->streamReconnecting = true;
+
+  EXPECT_EQ(handle.pause(), RecorderState::Paused);
+  EXPECT_EQ(handle.resume(), RecorderState::Recording);
+}
+
+TEST(ActiveRecorderHandleTest, PauseDoesNotReviveStoppedRecorder) {
+  auto handleOwner = ActiveRecorderHandleTestPeer::createHandle();
+  ActiveRecorderHandle &handle = *handleOwner;
+  auto recorder = std::make_shared<FakeAudioRecorder>();
+  ASSERT_TRUE(handle.tryStart(recorder).is_ok());
+  ASSERT_TRUE(recorder->stop().is_ok());
+
+  EXPECT_EQ(handle.pause(), RecorderState::Idle);
+  EXPECT_TRUE(recorder->isIdle());
 }
 
 TEST(ActiveRecorderHandleTest, PauseAndResumeWithExpectedIgnoreForeignRecorder) {

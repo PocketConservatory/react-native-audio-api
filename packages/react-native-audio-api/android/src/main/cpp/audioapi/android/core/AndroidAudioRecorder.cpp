@@ -275,16 +275,19 @@ Result<FileInfo, std::string> AndroidAudioRecorder::stop() {
 
 /// @brief Stops the capture stream and keeps it open, along with the outputs, for resume().
 /// AAudio cannot pause an input stream, so a stopped one is what lets the microphone go idle.
+/// A session whose stream is restarting or still starting is paused too; the restart reopens
+/// it stopped.
 /// Control lane, or any thread holding the ActiveRecorderHandle mutex.
 void AndroidAudioRecorder::pause() {
   std::scoped_lock streamLock(streamMutex_);
-  if (!isStreamRecording()) {
+  // Published first, so a callback that runs before the stream settles drops its frames.
+  if (!markPaused()) {
     return;
   }
 
-  // Published first, so a callback that runs before the stream settles drops its frames.
-  state_.store(RecorderState::Paused, std::memory_order_release);
-  mStream_->stop();
+  if (mStream_ != nullptr) {
+    mStream_->stop();
+  }
 }
 
 /// @brief Resumes the audio recording stream if it was previously paused.
@@ -322,7 +325,7 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
     oboe::AudioStream *oboeStream,
     void *audioData,
     int32_t numFrames) {
-  if (isPaused()) {
+  if (!acceptsInput()) {
     return oboe::DataCallbackResult::Continue;
   }
 
@@ -394,7 +397,6 @@ Result<NoneType, std::string> AndroidAudioRecorder::rerouteInput() {
 
 Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
   std::optional<StreamFormat> previousFormat;
-  RecorderState stateToRestore = RecorderState::Idle;
 
   {
     std::scoped_lock streamLock(streamMutex_);
@@ -408,7 +410,6 @@ Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
     if (formatResult.is_ok()) {
       previousFormat = formatResult.unwrap();
     }
-    stateToRestore = state_.load(std::memory_order_acquire);
     closeStream();
     releaseInputRoute();
   }
@@ -434,7 +435,8 @@ Result<NoneType, std::string> AndroidAudioRecorder::restartCapture() {
     }
 
     adoptInputRoute(routedDeviceId);
-    result = startCapture(previousFormat, stateToRestore);
+    // A pause that landed in the window reopens the stream stopped.
+    result = startCapture(previousFormat, state_.load(std::memory_order_acquire));
   }
 
   if (!result.is_ok()) {

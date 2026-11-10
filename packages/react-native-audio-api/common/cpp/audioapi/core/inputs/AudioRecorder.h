@@ -127,6 +127,14 @@ class AudioRecorder {
   /// The caller must hold callbackMutex_, fileWriterMutex_ and adapterNodeMutex_.
   Result<NoneType, std::string> reprepareOutputs(const StreamFormat &format);
 
+  /// @brief Moves a recording session to Paused. A pause acts on the session state, not the
+  /// stream's transient state, so it also lands while the stream is starting or restarting.
+  /// @return Whether the session was recording and is now paused.
+  bool markPaused();
+
+  /// The single write gate for the platform data paths. Lock-free, for the audio thread.
+  [[nodiscard]] bool acceptsInput() const;
+
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
 
