@@ -40,8 +40,8 @@ class AudioRecorder {
   Result<NoneType, std::string> enableFileOutput(std::shared_ptr<AudioFileProperties> properties);
   void disableFileOutput();
 
-  /// @brief Pauses a recording session, including one whose stream is starting or restarting.
-  /// A no-op when the recorder is idle or already paused; callers need not check the state.
+  /// @brief Pauses a recording session. A no-op when the recorder is idle or already paused;
+  /// callers need not check the state.
   virtual void pause() = 0;
   /// @brief Resumes a paused recording.
   /// @return The platform's reason when it refused; Ok when the recorder resumed or was not
