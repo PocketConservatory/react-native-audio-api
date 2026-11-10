@@ -96,6 +96,21 @@ struct AudioReadyPayload {
   }
 };
 
+struct InputRateChangedPayload {
+  double previousSampleRate;
+  double sampleRate;
+  /// "startup", "notification" or "measured".
+  std::string reason;
+
+  facebook::jsi::Object toJsiObject(facebook::jsi::Runtime &rt) const {
+    facebook::jsi::Object obj(rt);
+    obj.setProperty(rt, "previousSampleRate", previousSampleRate);
+    obj.setProperty(rt, "sampleRate", sampleRate);
+    obj.setProperty(rt, "reason", facebook::jsi::String::createFromUtf8(rt, reason));
+    return obj;
+  }
+};
+
 using AudioEventPayload = std::variant<
     EmptyPayload,
     DoubleValuePayload,
@@ -103,6 +118,7 @@ using AudioEventPayload = std::variant<
     InterruptionPayload,
     StringPayload,
     BufferEndedPayload,
-    AudioReadyPayload>;
+    AudioReadyPayload,
+    InputRateChangedPayload>;
 
 } // namespace audioapi

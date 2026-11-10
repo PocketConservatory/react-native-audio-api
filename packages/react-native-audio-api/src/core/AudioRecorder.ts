@@ -3,6 +3,7 @@ import { NotSupportedError } from '../errors';
 import {
   OnAudioReadyEventType,
   OnRecorderErrorEventType,
+  OnRecorderInputRateChangedEventType,
 } from '../events/types';
 import { IAudioRecorder, IRecorderAdapterNode } from '../jsi-interfaces';
 import {
@@ -43,6 +44,9 @@ function withDefaultFileOptions(
 export default class AudioRecorder {
   protected onAudioReadySubscription: AudioEventSubscription | null = null;
   protected onErrorSubscription: AudioEventSubscription | null = null;
+  protected onInputRateChangedSubscription: AudioEventSubscription | null =
+    null;
+
   protected readonly recorder: IAudioRecorder;
   protected options_: AudioRecorderFileOptions | null = null;
   private adapterNode: IRecorderAdapterNode | null = null;
@@ -262,5 +266,36 @@ export default class AudioRecorder {
 
     this.onErrorSubscription.remove();
     this.onErrorSubscription = null;
+  }
+
+  /**
+   * Called when the recorder starts reading its input at a new sample rate
+   * while recording, so the recording keeps its real speed. Fires on iOS only.
+   */
+  onInputRateChanged(
+    callback: (event: OnRecorderInputRateChangedEventType) => void
+  ): void {
+    this.clearOnInputRateChanged();
+
+    this.onInputRateChangedSubscription =
+      this.audioEventEmitter.addAudioEventListener(
+        'recorderInputRateChanged',
+        callback
+      );
+
+    this.recorder.setOnInputRateChanged({
+      callbackId: this.onInputRateChangedSubscription.subscriptionId,
+    });
+  }
+
+  clearOnInputRateChanged(): void {
+    if (!this.onInputRateChangedSubscription) {
+      return;
+    }
+
+    this.recorder.clearOnInputRateChanged();
+
+    this.onInputRateChangedSubscription.remove();
+    this.onInputRateChangedSubscription = null;
   }
 }

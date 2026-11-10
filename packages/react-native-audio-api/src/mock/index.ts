@@ -1003,6 +1003,7 @@ class AudioRecorderMock {
   private eventEmitter = new MockAudioEventEmitter();
   private onAudioReadySubscription: MockEventSubscription | null = null;
   private onErrorSubscription: MockEventSubscription | null = null;
+  private onInputRateChangedSubscription: MockEventSubscription | null = null;
 
   // Options only configure the native capture chain, so the mock ignores them.
   constructor(_options?: AudioRecorderOptions) {
@@ -1124,6 +1125,25 @@ class AudioRecorderMock {
     if (this.onErrorSubscription) {
       this.onErrorSubscription.remove();
       this.onErrorSubscription = null;
+    }
+  }
+
+  onInputRateChanged(
+    callback: (event: Record<string, unknown> | undefined) => void
+  ): void {
+    this.clearOnInputRateChanged();
+
+    this.onInputRateChangedSubscription =
+      this.eventEmitter.addAudioEventListener(
+        'recorderInputRateChanged',
+        callback
+      );
+  }
+
+  clearOnInputRateChanged(): void {
+    if (this.onInputRateChangedSubscription) {
+      this.onInputRateChangedSubscription.remove();
+      this.onInputRateChangedSubscription = null;
     }
   }
 }

@@ -4,7 +4,10 @@
 #import <Foundation/Foundation.h>
 #import <audioapi/ios/system/AudioEngine.h>
 
-typedef void (^AudioReceiverBlock)(const AudioBufferList *inputBuffer, int numFrames);
+typedef void (^AudioReceiverBlock)(
+    const AudioTimeStamp *timestamp,
+    const AudioBufferList *inputBuffer,
+    int numFrames);
 
 @interface NativeAudioRecorder : NSObject
 
@@ -25,6 +28,10 @@ typedef void (^AudioReceiverBlock)(const AudioBufferList *inputBuffer, int numFr
 - (AVAudioFormat *)getResolvedInputFormat;
 - (int)getResolvedBufferSize;
 - (BOOL)refreshResolvedInputFormatReturningChanged:(BOOL *)formatChanged;
+/// Keeps the resolved layout and reads the input at @p sampleRate instead, for frames that arrive
+/// at a rate the engine does not report. Later refreshes keep @p sampleRate while the engine still
+/// reports the rate it replaced, until the recorder starts or stops.
+- (void)overrideResolvedInputSampleRate:(double)sampleRate;
 - (BOOL)start:(NSError **)error;
 
 - (void)stop;

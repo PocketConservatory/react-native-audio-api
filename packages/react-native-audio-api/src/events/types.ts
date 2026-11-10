@@ -36,6 +36,23 @@ export interface OnRecorderErrorEventType {
   message: string;
 }
 
+/**
+ * Why the recorder now reads its input at a new sample rate: the rate changed
+ * while the recording was starting, iOS reported a hardware change, or the
+ * recorder measured that frames arrive at a rate other than the one it was
+ * reading them at.
+ */
+export type RecorderInputRateChangeReason =
+  | 'startup'
+  | 'notification'
+  | 'measured';
+
+export interface OnRecorderInputRateChangedEventType {
+  previousSampleRate: number;
+  sampleRate: number;
+  reason: RecorderInputRateChangeReason;
+}
+
 type SystemEvents = {
   volumeChange: EventTypeWithValue;
   interruption: OnInterruptionEventType;
@@ -79,6 +96,7 @@ interface AudioAPIEvents {
   positionChanged: EventTypeWithValue;
   bufferEnded: OnBufferEndEventType;
   recorderError: OnRecorderErrorEventType;
+  recorderInputRateChanged: OnRecorderInputRateChangedEventType;
   /** `value` is true while an `<Audio>` source is stalled on decoded data. */
   bufferingStateChanged: EventTypeWithBool;
   stateChange: EventEmptyType;

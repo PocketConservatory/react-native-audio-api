@@ -61,6 +61,9 @@ class AudioRecorder {
   void setOnErrorCallback(uint64_t callbackId);
   void clearOnErrorCallback();
 
+  void setOnInputRateChangedCallback(uint64_t callbackId);
+  void clearOnInputRateChangedCallback();
+
   virtual double getCurrentDuration() const;
 
   bool usesCallback() const;
@@ -150,6 +153,11 @@ class AudioRecorder {
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
 
+  /// Tells the JS input-rate callback, if one is registered, that the input is now read at
+  /// @p sampleRate. @p reason is "startup", "notification" or "measured".
+  void
+  reportInputRateChanged(double previousSampleRate, double sampleRate, const std::string &reason);
+
   /// Payload of @p handle, or nullptr when not connected. Valid exactly as long as the handle
   /// is held, so callers keep the handle (or adapterNodeMutex_) for the pointer's lifetime.
   static RecorderAdapterNode *adapterNodeOf(
@@ -183,6 +191,7 @@ class AudioRecorder {
   mutable std::mutex adapterNodeMutex_;
 
   std::atomic<uint64_t> errorCallbackId_{0};
+  std::atomic<uint64_t> inputRateChangedCallbackId_{0};
 
   std::shared_ptr<AudioFileWriter> fileWriter_ = nullptr;
   std::shared_ptr<utils::graph::NodeHandle> adapterNodeHandle_ = nullptr;

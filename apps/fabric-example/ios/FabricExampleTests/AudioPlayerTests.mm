@@ -489,7 +489,7 @@ struct TestAudioOutput {
 
   self.audioEngine.startIfNecessaryResult = YES;
   NativeAudioRecorder *recorder = [[NativeAudioRecorder alloc]
-       initWithReceiverBlock:^(const AudioBufferList *inputBuffer, int numFrames) {}
+       initWithReceiverBlock:^(const AudioTimeStamp *timestamp, const AudioBufferList *inputBuffer, int numFrames) {}
       voiceProcessingEnabled:NO];
 
   XCTAssertTrue([recorder start:nil]);
