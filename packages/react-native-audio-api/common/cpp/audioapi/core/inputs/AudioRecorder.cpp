@@ -434,10 +434,6 @@ bool AudioRecorder::markPaused() {
       expected, RecorderState::Paused, std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
-bool AudioRecorder::acceptsInput() const {
-  return state_.load(std::memory_order_acquire) == RecorderState::Recording;
-}
-
 bool AudioRecorder::usesCallback() const {
   return callbackOutputState_.load(std::memory_order_acquire) == OutputState::Active;
 }

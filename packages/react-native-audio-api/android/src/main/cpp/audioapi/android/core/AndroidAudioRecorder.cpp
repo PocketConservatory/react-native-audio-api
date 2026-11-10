@@ -325,7 +325,7 @@ oboe::DataCallbackResult AndroidAudioRecorder::onAudioReady(
     oboe::AudioStream *oboeStream,
     void *audioData,
     int32_t numFrames) {
-  if (!acceptsInput()) {
+  if (isPaused()) {
     return oboe::DataCallbackResult::Continue;
   }
 

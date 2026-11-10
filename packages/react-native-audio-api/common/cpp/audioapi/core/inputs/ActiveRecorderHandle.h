@@ -36,7 +36,7 @@ class ActiveRecorderHandle {
   /// ongoing because it still owns an open output file.
   [[nodiscard]] bool isRecordingOngoing() const;
 
-  /// @brief Pauses an actively recording session; a no-op in any other state.
+  /// @brief Pauses the session through AudioRecorder::pause(), which decides whether it applies.
   RecorderState pause();
 
   /// @brief pause() if the slot holds @p expected; otherwise leaves the occupant alone and

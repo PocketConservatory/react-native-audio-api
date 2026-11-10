@@ -40,6 +40,8 @@ class AudioRecorder {
   Result<NoneType, std::string> enableFileOutput(std::shared_ptr<AudioFileProperties> properties);
   void disableFileOutput();
 
+  /// @brief Pauses a recording session, including one whose stream is starting or restarting.
+  /// A no-op when the recorder is idle or already paused; callers need not check the state.
   virtual void pause() = 0;
   /// @brief Resumes a paused recording.
   /// @return The platform's reason when it refused; Ok when the recorder resumed or was not
@@ -131,9 +133,6 @@ class AudioRecorder {
   /// stream's transient state, so it also lands while the stream is starting or restarting.
   /// @return Whether the session was recording and is now paused.
   bool markPaused();
-
-  /// The single write gate for the platform data paths. Lock-free, for the audio thread.
-  [[nodiscard]] bool acceptsInput() const;
 
   /// Delivers @p message to the JS error callback, if one is registered.
   void reportError(const std::string &message);
